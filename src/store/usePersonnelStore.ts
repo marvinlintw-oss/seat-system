@@ -1,7 +1,9 @@
+// src/store/usePersonnelStore.ts
 import { create } from 'zustand';
 import { useVenueStore } from './useVenueStore';
+import { CSV_HEADERS } from '../utils/constants';
 
-export interface Person {
+export type Person = {
   id: string;
   name: string;
   title: string;
@@ -9,126 +11,109 @@ export interface Person {
   rankScore: number;
   category: string;
   isSeated: boolean;
-}
+};
 
 interface PersonnelState {
   personnel: Person[];
   addPerson: (person: Person) => void;
-  toggleAttendance: (id: string) => void;
+  updatePersonnelList: (list: Person[]) => void;
+  addNewPerson: (name: string, title: string, org: string, category: string, rankScore: number) => void;
   
-  // 修改：將舊的兩個排位函式改為新的命名
-  autoArrangeByImportance: () => void; // 依重要度排位
-  autoArrangeByPosition: () => void;   // 依位置排位
-  
+  autoArrangeByImportance: () => void;
+  autoArrangeByPosition: () => void;
   resetSeating: () => void;
   syncSeatingStatus: () => void;
-  addNewPerson: (name: string, title: string, org: string, category: string, rankScore: number) => void;
-  updatePersonnelList: (list: Person[]) => void;
+  downloadCsvTemplate: () => void;
 }
 
-const MOCK_DATA: Person[] = Array.from({ length: 10 }).map((_, i) => ({
-  id: `p-${i}`,
-  name: i === 0 ? '總統' : i === 1 ? '行政院長' : `貴賓 ${i + 1}`,
-  title: i === 0 ? '總統' : i === 1 ? '院長' : '部長',
-  organization: i < 5 ? '總統府' : '行政院',
-  rankScore: 100 - i,
-  category: i < 5 ? 'VIP' : 'Guest',
-  isSeated: false,
-}));
-
-// 虛擬畫布中心點 (對應 VenueCanvas 的 VIRTUAL_WIDTH = 3200)
+// 注意：需與 VenueStore 的常數保持一致
 const CANVAS_CENTER_X = 1600;
 
 export const usePersonnelStore = create<PersonnelState>((set, get) => ({
-  personnel: MOCK_DATA,
+  personnel: [],
 
   addPerson: (person) => set((state) => ({ personnel: [...state.personnel, person] })),
-  
-  toggleAttendance: (_id) => set((state) => ({ personnel: state.personnel })),
 
-  updatePersonnelList: (list) => set({ personnel: list }),
+  updatePersonnelList: (list) => {
+    set({ personnel: list });
+    get().syncSeatingStatus();
+  },
 
-  // 4.1 依重要度自動排位
-  // 邏輯：依人物重要度填入座椅。座椅優先順序：權重(小到大) -> 前後(前到後) -> 中間到兩側
+  addNewPerson: (name, title, org, category, rankScore) => set((state) => ({
+    personnel: [
+        {
+            id: `new-${Date.now()}`,
+            name,
+            title,
+            organization: org,
+            rankScore: rankScore,
+            category: category,
+            isSeated: false
+        },
+        ...state.personnel
+    ]
+  })),
+
   autoArrangeByImportance: () => {
     const venueStore = useVenueStore.getState();
     const { personnel } = get();
 
-    // 1. 取得所有有效座位 (不論有沒有人)
     const validSeats = venueStore.seats.filter(s => 
       !s.isPinned && s.type !== 'shape' && s.isVisible !== false
     );
 
-    // 2. 對座位進行排序 (重要度優先)
     const sortedSeats = [...validSeats].sort((a, b) => {
-      // 第一優先：權重 (越小越重要)
       const weightDiff = (a.rankWeight || 0) - (b.rankWeight || 0);
       if (weightDiff !== 0) return weightDiff;
 
-      // 第二優先：Y軸 (越前面越重要)
       const yDiff = a.y - b.y;
-      if (Math.abs(yDiff) > 10) return yDiff; // 給一點容許值，視為同一排
+      if (Math.abs(yDiff) > 20) return yDiff;
 
-      // 第三優先：離中心點距離 (越中間越重要)
       const distA = Math.abs((a.x + (a.width || 100)/2) - CANVAS_CENTER_X);
       const distB = Math.abs((b.x + (b.width || 100)/2) - CANVAS_CENTER_X);
       return distA - distB;
     });
 
-    // 3. 對人員進行排序 (分數高到低)
     const sortedPeople = [...personnel].sort((a, b) => b.rankScore - a.rankScore);
 
-    // 4. 先清空所有非固定座位的指派
     venueStore.clearAllAssignments();
 
-    // 5. 依序填入
     const limit = Math.min(sortedSeats.length, sortedPeople.length);
     for (let i = 0; i < limit; i++) {
       venueStore.updateSeatAssignment(sortedSeats[i].id, sortedPeople[i].id);
     }
-
-    // 6. 同步狀態
+    
     get().syncSeatingStatus();
   },
 
-  // 4.2 依位置自動排位
-  // 邏輯：不考慮椅子重要度。優先順序：前後(前到後) -> 中間到兩側
   autoArrangeByPosition: () => {
     const venueStore = useVenueStore.getState();
     const { personnel } = get();
 
-    // 1. 取得所有有效座位
     const validSeats = venueStore.seats.filter(s => 
       !s.isPinned && s.type !== 'shape' && s.isVisible !== false
     );
 
-    // 2. 對座位進行排序 (純幾何位置)
     const sortedSeats = [...validSeats].sort((a, b) => {
-      // 第一優先：Y軸 (越前面越優先)
       const yDiff = a.y - b.y;
-      // 若 Y 差距在 50px 內視為同一排，避免微小誤差導致順序錯亂
-      if (Math.abs(yDiff) > 50) return yDiff;
+      if (Math.abs(yDiff) > 20) return yDiff;
 
-      // 第二優先：離中心點距離 (越中間越優先)
       const distA = Math.abs((a.x + (a.width || 100)/2) - CANVAS_CENTER_X);
       const distB = Math.abs((b.x + (b.width || 100)/2) - CANVAS_CENTER_X);
       
-      // 如果距離中心差不多，則從左到右 (保持視覺一致性)
       if (Math.abs(distA - distB) < 5) return a.x - b.x;
-      
       return distA - distB;
     });
 
-    // 3. 對人員進行排序
     const sortedPeople = [...personnel].sort((a, b) => b.rankScore - a.rankScore);
 
-    // 4. 清空並填入
     venueStore.clearAllAssignments();
+
     const limit = Math.min(sortedSeats.length, sortedPeople.length);
     for (let i = 0; i < limit; i++) {
       venueStore.updateSeatAssignment(sortedSeats[i].id, sortedPeople[i].id);
     }
-
+    
     get().syncSeatingStatus();
   },
 
@@ -155,13 +140,18 @@ export const usePersonnelStore = create<PersonnelState>((set, get) => ({
     }));
   },
 
-  addNewPerson: (name, title, org, category, rankScore) => set((state) => ({
-    personnel: [
-        {
-            id: `new-${Date.now()}`,
-            name, title, organization: org, rankScore, category, isSeated: false
-        },
-        ...state.personnel
-    ]
-  }))
+  downloadCsvTemplate: () => {
+    const bom = "\uFEFF";
+    const headerRow = CSV_HEADERS.map(h => h.label).join(",");
+    const exampleRow = "範例姓名,範例職稱,範例單位,府院首長,95";
+    const csvContent = bom + headerRow + "\n" + exampleRow;
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "personnel_import_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
 }));

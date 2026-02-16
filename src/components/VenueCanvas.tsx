@@ -1,12 +1,12 @@
+// src/components/VenueCanvas.tsx
 import React, { useRef, useState, useEffect } from 'react';
 import Konva from 'konva';
-import { Stage, Layer, Rect, Text, Group, Circle, Line, Image as KonvaImage } from 'react-konva';
-import { useVenueStore } from '../store/useVenueStore';
+import { Stage, Layer, Rect, Text, Group, Circle, Line, Image as KonvaImage, Transformer } from 'react-konva';
+import { useVenueStore, type Seat, VIRTUAL_WIDTH, VIRTUAL_HEIGHT } from '../store/useVenueStore';
 import { usePersonnelStore } from '../store/usePersonnelStore';
-import { Minus, Plus, Save, Image as ImageIcon, Grid3X3, MonitorStop, Eraser, Trash2, Unlock, Lock, RotateCcw, Edit, HelpCircle, X, Printer, FileText } from 'lucide-react';
+import { useSystemStore } from '../store/useSystemStore'; // 引用新 store
+import { Minus, Plus, Grid3X3, Eraser, RotateCcw, HelpCircle, X, Maximize} from 'lucide-react';
 
-const VIRTUAL_WIDTH = 3200;
-const VIRTUAL_HEIGHT = 2400;
 const SEAT_WIDTH = 100;
 const SEAT_HEIGHT = 150;
 const GRID_SIZE = 20;
@@ -14,74 +14,85 @@ const GRID_SIZE = 20;
 export const VenueCanvas: React.FC = () => {
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // 右鍵選單狀態
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, seatId: string } | null>(null);
+  const [editSeatData, setEditSeatData] = useState<{ label: string, weight: number } | null>(null);
+
+  // 1.1 長按平移狀態
+  const [isPanning, setIsPanning] = useState(false);
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const panTimer = useRef<NodeJS.Timeout | null>(null);
 
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [hoveredSeatId, setHoveredSeatId] = useState<string | null>(null);
-  const [bgImageObj, setBgImageObj] = useState<HTMLImageElement | null>(null);
-
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [batchRows, setBatchRows] = useState(3);
   const [batchCols, setBatchCols] = useState(5);
-  const [isEraserMode, setIsEraserMode] = useState(false);
   
-  const [placingBatch, setPlacingBatch] = useState<{ rows: number, cols: number } | null>(null);
-  const [mouseGridPos, setMouseGridPos] = useState<{ x: number, y: number } | null>(null);
-  
-  const [isConverting, setIsConverting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [editingSeat, setEditingSeat] = useState<{ id: string, label: string, rankWeight: number } | null>(null);
-
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; seatId: string | null }>({
-    visible: false, x: 0, y: 0, seatId: null
-  });
+  const [bgImageObj, setBgImageObj] = useState<HTMLImageElement | null>(null);
 
   const { 
-    seats, stageScale, stagePosition, backgroundImage,
-    setStageScale, setStagePosition, 
-    addSeat, updateSeatPosition, togglePinSeat, updateSeatAssignment, unassignSeat, removeSeat,
-    saveToStorage, loadFromStorage, setBackgroundImage, addSeatBatch, 
-    toggleMainStage, undo, updateSeatProperties
+    seats, stageScale, stagePosition, backgroundImage, isEditMode, isSequencing, selectedSeatIds, rankSequenceCounter,
+    setStageScale, setStagePosition, setBackgroundImage,
+    addSeat, updateSeatPosition, unassignSeat,
+    addSeatBatch, undo, moveSeatsBatch,
+    setSelection, addToSelection, clearSelection, copySelection, pasteSelection, deleteSelectedSeats,
+    applyRankToSeat, updateSeatProperties, setSeatZone, updateSeatAssignment, toggleMainStage
   } = useVenueStore();
 
   const { personnel, syncSeatingStatus } = usePersonnelStore();
+  const { categories, getCategoryByLabel } = useSystemStore();
+
+  // Selection Box
+  const [selectionRect, setSelectionRect] = useState<{x:number, y:number, w:number, h:number} | null>(null);
+  const isSelecting = useRef(false);
+  const selectStartPos = useRef({x:0, y:0});
+
+  // Batch Place
+  const [placingBatch, setPlacingBatch] = useState<{ rows: number, cols: number } | null>(null);
+  const [mouseGridPos, setMouseGridPos] = useState<{ x: number, y: number } | null>(null);
 
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
-        const w = containerRef.current.offsetWidth;
-        const h = containerRef.current.offsetHeight;
-        setSize({ width: w, height: h });
-
-        // [修正] 初始載入時，將畫布視角置中
+        setSize({ width: containerRef.current.offsetWidth, height: containerRef.current.offsetHeight });
+        // 初始化置中
         if (stagePosition.x === 0 && stagePosition.y === 0) {
-            const initialScale = 0.4; // 縮小一點以看到全貌
-            const centerX = (w - VIRTUAL_WIDTH * initialScale) / 2;
-            const centerY = (h - VIRTUAL_HEIGHT * initialScale) / 2;
-            
-            setStageScale(initialScale);
-            setStagePosition({ x: centerX, y: centerY + 50 }); // +50 微調
+            setStageScale(0.4);
+            setStagePosition({ x: (containerRef.current.offsetWidth - VIRTUAL_WIDTH * 0.4)/2, y: 50 });
         }
       }
     };
     window.addEventListener('resize', updateSize);
     updateSize();
-    loadFromStorage();
     
-    const timer = setTimeout(() => syncSeatingStatus(), 200);
+    // 處理 Transformer (舞台形狀調整)
+    if (isEditMode && transformerRef.current && stageRef.current) {
+       const selectedNodes = stageRef.current.find('.shape-stage'); // 只選取舞台
+       const stageNode = selectedNodes.find(n => selectedSeatIds.includes(n.id()));
+       if (stageNode) {
+           transformerRef.current.nodes([stageNode]);
+           transformerRef.current.getLayer()?.batchDraw();
+       } else {
+           transformerRef.current.nodes([]);
+       }
+    }
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
-        undo();
-        syncSeatingStatus();
+      if (!isEditMode) return;
+      if (e.key === 'Delete') { deleteSelectedSeats(); syncSeatingStatus(); }
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'c') copySelection();
+        if (e.key === 'v') { pasteSelection(100, 100); syncSeatingStatus(); }
+        if (e.key === 'z') { e.preventDefault(); undo(); syncSeatingStatus(); }
       }
       if (e.key === 'Escape') {
         if (placingBatch) setPlacingBatch(null);
-        setContextMenu({ ...contextMenu, visible: false });
-        setIsEraserMode(false);
-        setEditingSeat(null);
-        setShowHelp(false);
+        clearSelection();
+        setContextMenu(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -89,325 +100,174 @@ export const VenueCanvas: React.FC = () => {
     return () => {
       window.removeEventListener('resize', updateSize);
       window.removeEventListener('keydown', handleKeyDown);
-      clearTimeout(timer);
     };
-  }, []); // Empty dependency array ensures this runs once on mount
+  }, [isEditMode, selectedSeatIds]);
 
   useEffect(() => {
     if (backgroundImage) {
       const img = new window.Image();
       img.src = backgroundImage;
       img.onload = () => setBgImageObj(img);
-    } else {
-      setBgImageObj(null);
-    }
+    } else setBgImageObj(null);
   }, [backgroundImage]);
 
-  useEffect(() => {
-    const handleClickOutside = () => setContextMenu({ ...contextMenu, visible: false });
-    window.addEventListener('click', handleClickOutside);
-    return () => window.removeEventListener('click', handleClickOutside);
-  }, [contextMenu]);
-
-  const snapToGrid = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
-
-  const handleBatchStart = () => {
-    setPlacingBatch({ rows: batchRows, cols: batchCols });
-    setShowBatchModal(false);
-  };
-
-  const handleToggleStage = () => {
-    toggleMainStage();
-  };
-
-  const checkBatchOverlap = (startX: number, startY: number, rows: number, cols: number) => {
-    const gapX = 10;
-    const gapY = 10;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const x = startX + c * (SEAT_WIDTH + gapX);
-        const y = startY + r * (SEAT_HEIGHT + gapY);
-        const isOverlapping = seats.some(seat => 
-          seat.isVisible !== false &&
-          Math.abs(seat.x - x) < SEAT_WIDTH && 
-          Math.abs(seat.y - y) < SEAT_HEIGHT
-        );
-        if (isOverlapping) return true;
-      }
-    }
-    return false;
-  };
-
-
-  const handleStageClick = () => {
-    if (placingBatch && mouseGridPos) {
-      // [修正] 邊界檢查 (Boundary Check)
-      const gapX = 10;
-      const gapY = 10;
-      const batchWidth = placingBatch.cols * SEAT_WIDTH + (placingBatch.cols - 1) * gapX;
-      const batchHeight = placingBatch.rows * SEAT_HEIGHT + (placingBatch.rows - 1) * gapY;
-      
-      const endX = mouseGridPos.x + batchWidth;
-      const endY = mouseGridPos.y + batchHeight;
-
-      // 檢查是否超出畫布範圍 (包含小於 0 的情況)
-      if (mouseGridPos.x < 0 || mouseGridPos.y < 0 || endX > VIRTUAL_WIDTH || endY > VIRTUAL_HEIGHT) {
-        alert(`無法放置：矩陣會超出畫布邊界，請往中間移動。`);
-        return;
-      }
-
-      // 重疊檢查
-      const isOverlap = checkBatchOverlap(mouseGridPos.x, mouseGridPos.y, placingBatch.rows, placingBatch.cols);
-      
-      if (!isOverlap) {
-        addSeatBatch(mouseGridPos.x, mouseGridPos.y, placingBatch.rows, placingBatch.cols);
-        setPlacingBatch(null);
-      } else {
-        alert('此位置與現有座位或舞台重疊，請移動到空曠處');
-      }
-    }
-  };
-
-  const handleMouseMove = () => {
-    if (placingBatch && stageRef.current) {
-      const stage = stageRef.current;
-      const pointer = stage.getRelativePointerPosition();
-      if (pointer) {
-        const totalWidth = placingBatch.cols * (SEAT_WIDTH + 10);
-        const totalHeight = placingBatch.rows * (SEAT_HEIGHT + 10);
-        
-        setMouseGridPos({
-          x: snapToGrid(pointer.x - totalWidth / 2),
-          y: snapToGrid(pointer.y - totalHeight / 2)
-        });
-      }
-    }
-  };
-
-  const handleContextMenu = (e: Konva.KonvaEventObject<PointerEvent>, seatId: string) => {
+  // 1.1 滾輪縮放
+  const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
-    const pointer = stageRef.current?.getPointerPosition();
-    const containerRect = containerRef.current?.getBoundingClientRect();
+    const scaleBy = 1.05;
+    const stage = e.target.getStage();
+    if (!stage) return;
+    const oldScale = stage.scaleX();
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+
+    const mousePointTo = {
+      x: (pointer.x - stage.x()) / oldScale,
+      y: (pointer.y - stage.y()) / oldScale,
+    };
+
+    let newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+    newScale = Math.max(0.1, Math.min(newScale, 5)); // 限制縮放
+
+    const newPos = {
+      x: pointer.x - mousePointTo.x * newScale,
+      y: pointer.y - mousePointTo.y * newScale,
+    };
+
+    setStageScale(newScale);
+    setStagePosition(newPos);
+  };
+
+  // 1.1 長按平移邏輯
+  const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    setContextMenu(null);
+    const isBackground = e.target === e.target.getStage() || e.target.name() === 'venue-background';
     
-    if (pointer && containerRect) {
-      setContextMenu({
-        visible: true,
-        x: pointer.x + containerRect.left,
-        y: pointer.y + containerRect.top,
-        seatId: seatId
-      });
-    }
-  };
-
-  const handleMenuAction = (action: 'delete' | 'pin' | 'unassign' | 'edit') => {
-    if (!contextMenu.seatId) return;
-    
-    if (action === 'delete') {
-      removeSeat(contextMenu.seatId);
-    } else if (action === 'pin') {
-      togglePinSeat(contextMenu.seatId);
-    } else if (action === 'unassign') {
-      unassignSeat(contextMenu.seatId);
-    } else if (action === 'edit') {
-      const seat = seats.find(s => s.id === contextMenu.seatId);
-      if (seat) {
-        setEditingSeat({ id: seat.id, label: seat.label, rankWeight: seat.rankWeight || 0 });
-      }
-    }
-    syncSeatingStatus();
-    setContextMenu({ ...contextMenu, visible: false });
-  };
-
-  const handleEditConfirm = () => {
-    if (editingSeat) {
-      updateSeatProperties(editingSeat.id, editingSeat.label, editingSeat.rankWeight);
-      setEditingSeat(null);
-    }
-  };
-
-  const handleEraserClick = (seatId: string) => {
-    removeSeat(seatId);
-    syncSeatingStatus();
-  };
-
-  // 生成 SVG 字串
-  const generateSVGString = () => {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const visibleSeats = seats.filter(s => s.isVisible !== false);
-    
-    if (visibleSeats.length === 0) return null;
-
-    visibleSeats.forEach(seat => {
-      if (Number.isFinite(seat.x) && Number.isFinite(seat.y)) {
-        const w = seat.width || SEAT_WIDTH;
-        const h = seat.height || SEAT_HEIGHT;
-        minX = Math.min(minX, seat.x);
-        minY = Math.min(minY, seat.y);
-        maxX = Math.max(maxX, seat.x + w);
-        maxY = Math.max(maxY, seat.y + h);
-      }
-    });
-
-    const padding = 50;
-    const exportX = minX - padding;
-    const exportY = minY - padding;
-    const width = (maxX - minX) + padding * 2;
-    const height = (maxY - minY) + padding * 2;
-
-    let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${exportX} ${exportY} ${width} ${height}">`;
-    svgContent += `<rect x="${exportX}" y="${exportY}" width="${width}" height="${height}" fill="white" />`;
-
-    if (backgroundImage) {
-        svgContent += `<image href="${backgroundImage}" x="0" y="0" width="${VIRTUAL_WIDTH}" height="${VIRTUAL_HEIGHT}" opacity="0.8" />`;
-    }
-
-    visibleSeats.forEach(seat => {
-        const sX = seat.x;
-        const sY = seat.y;
-        const sW = seat.width || SEAT_WIDTH;
-        const sH = seat.height || SEAT_HEIGHT;
-        const occupant = personnel.find(p => p.id === seat.assignedPersonId);
+    if (e.evt.button === 0 && isBackground) { // 左鍵
+        panTimer.current = setTimeout(() => {
+             setIsPanning(true);
+             if(containerRef.current) containerRef.current.style.cursor = 'grab';
+        }, 300); // 長按300ms觸發
+        setLastMousePos({ x: e.evt.clientX, y: e.evt.clientY });
         
-        let bgColor = '#ffffff';
-        let strokeColor = '#94a3b8';
-        
-        if (seat.isPinned) {
-            bgColor = '#fecaca';
-            strokeColor = '#ef4444';
-        } else if (occupant) {
-            bgColor = occupant.category === 'VIP' ? '#fef08a' : '#bfdbfe';
-        }
-
-        if (seat.type === 'shape') {
-             svgContent += `<rect x="${sX}" y="${sY}" width="${sW}" height="${sH}" fill="${seat.isVisible===false ? 'none' : '#d1d5db'}" stroke="#64748b" stroke-width="2" rx="4" />`;
-             svgContent += `<text x="${sX + sW/2}" y="${sY + sH/2}" font-family="sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">${seat.label}</text>`;
-        } else {
-             svgContent += `<rect x="${sX}" y="${sY}" width="${sW}" height="${sH}" fill="${bgColor}" stroke="${strokeColor}" stroke-width="2" rx="4" />`;
-             svgContent += `<path d="M ${sX} ${sY} L ${sX+sW} ${sY} L ${sX+sW} ${sY+24} L ${sX} ${sY+24} Z" fill="${seat.isPinned ? '#ef4444' : '#e2e8f0'}" stroke="none" />`;
-             svgContent += `<text x="${sX + sW/2}" y="${sY + 16}" font-family="sans-serif" font-size="12" font-weight="bold" fill="${seat.isPinned ? 'white' : '#475569'}" text-anchor="middle">${seat.label}</text>`;
-
-             if (occupant) {
-                 svgContent += `<text x="${sX + sW/2}" y="${sY + 45}" font-family="sans-serif" font-size="12" fill="#64748b" text-anchor="middle">${occupant.organization || ''}</text>`;
-                 svgContent += `<text x="${sX + sW/2}" y="${sY + 75}" font-family="sans-serif" font-size="20" font-weight="bold" fill="#1e293b" text-anchor="middle">${occupant.name}</text>`;
-                 svgContent += `<text x="${sX + sW/2}" y="${sY + 100}" font-family="sans-serif" font-size="12" fill="#334155" text-anchor="middle">${occupant.title || ''}</text>`;
-             } else {
-                 svgContent += `<text x="${sX + sW/2}" y="${sY + 80}" font-family="sans-serif" font-size="14" fill="#cbd5e1" text-anchor="middle">空位</text>`;
+        // 同時準備框選
+        if (!isPanning && isEditMode && !placingBatch) {
+             const stage = e.target.getStage();
+             const ptr = stage?.getRelativePointerPosition();
+             if(ptr) {
+                selectStartPos.current = ptr;
+                isSelecting.current = true;
+                if (!e.evt.shiftKey && !e.evt.ctrlKey) clearSelection();
              }
         }
-    });
-
-    svgContent += `</svg>`;
-    return { content: svgContent, width, height };
-  };
-
-  // 列印為 PDF
-  const handlePrintPDF = () => {
-    const data = generateSVGString();
-    if (!data) { alert("無內容可輸出"); return; }
-
-    const isLandscape = data.width >= data.height;
-    const pageOrientation = isLandscape ? 'landscape' : 'portrait';
-
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>列印座位表</title>
-            <style>
-              @page { size: ${pageOrientation}; margin: 5mm; }
-              body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: system-ui, -apple-system, sans-serif; }
-              svg { max-width: 98%; max-height: 98vh; height: auto; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-              @media print { body { display: block; } svg { box-shadow: none; max-width: 100%; } }
-            </style>
-          </head>
-          <body>
-            ${data.content}
-            <script>window.onload = () => { setTimeout(() => { window.print(); }, 500); };</script>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-    } else {
-        alert("瀏覽器封鎖了彈跳視窗，請允許開啟視窗以進行列印。");
     }
   };
 
-  // SVG 轉 PNG
-  const handleExportSvgToPng = () => {
-    const data = generateSVGString();
-    if (!data) { alert("無內容可輸出"); return; }
+  const handleStageMouseMove = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    // 1.1 平移處理
+    if (isPanning) {
+        const stage = e.target.getStage();
+        if(!stage) return;
+        const dx = e.evt.clientX - lastMousePos.x;
+        const dy = e.evt.clientY - lastMousePos.y;
+        setStagePosition({ x: stage.x() + dx, y: stage.y() + dy });
+        setLastMousePos({ x: e.evt.clientX, y: e.evt.clientY });
+        return; 
+    }
 
-    setIsConverting(true);
-
-    const img = new Image();
-    const svgBlob = new Blob([data.content], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
-    
-    img.onload = () => {
-      const MAX_WIDTH = 4000; 
-      let targetWidth = data.width;
-      let targetHeight = data.height;
-
-      if (targetWidth > MAX_WIDTH) {
-        const ratio = MAX_WIDTH / targetWidth;
-        targetWidth = MAX_WIDTH;
-        targetHeight = data.height * ratio;
-        console.warn(`圖片過大，已自動縮放至寬度 ${MAX_WIDTH}px 以確保 PNG 輸出成功`);
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
-      const ctx = canvas.getContext('2d');
-      
-      if (ctx) {
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-        
-        try {
-          const pngUrl = canvas.toDataURL('image/png');
-          const link = document.createElement('a');
-          link.download = `seat-chart-view-${new Date().toISOString().slice(0,10)}.png`;
-          link.href = pngUrl;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        } catch (e) {
-          alert('PNG 轉換失敗：記憶體不足。請改用 PDF 列印或 SVG 輸出。');
+    // 矩陣預覽
+    if (placingBatch && stageRef.current) {
+        const stage = stageRef.current;
+        const pointer = stage.getRelativePointerPosition();
+        if (pointer) {
+          const totalW = placingBatch.cols * 110;
+          const totalH = placingBatch.rows * 160;
+          setMouseGridPos({
+            x: Math.round((pointer.x - totalW/2) / GRID_SIZE) * GRID_SIZE,
+            y: Math.round((pointer.y - totalH/2) / GRID_SIZE) * GRID_SIZE
+          });
         }
-      }
-      
-      URL.revokeObjectURL(url);
-      setIsConverting(false);
-    };
+        return;
+    }
 
-    img.onerror = () => {
-      alert('圖片轉換發生錯誤');
-      setIsConverting(false);
-    };
-
-    img.src = url;
-  };
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => setBackgroundImage(reader.result as string);
-      reader.readAsDataURL(file);
+    // 框選
+    if (isSelecting.current && selectStartPos.current && isEditMode) {
+        if (panTimer.current) clearTimeout(panTimer.current); // 取消平移
+        const stage = e.target.getStage();
+        const ptr = stage?.getRelativePointerPosition();
+        if (ptr) {
+            setSelectionRect({
+                x: Math.min(selectStartPos.current.x, ptr.x),
+                y: Math.min(selectStartPos.current.y, ptr.y),
+                w: Math.abs(ptr.x - selectStartPos.current.x),
+                h: Math.abs(ptr.y - selectStartPos.current.y)
+            });
+        }
     }
   };
 
-  const handleRemovePerson = (e: any, seatId: string) => {
-    e.cancelBubble = true;
-    unassignSeat(seatId);
-    syncSeatingStatus();
+  const handleStageMouseUp = () => {
+    if (panTimer.current) clearTimeout(panTimer.current);
+    setIsPanning(false);
+    if (containerRef.current) containerRef.current.style.cursor = isEditMode ? 'crosshair' : 'default';
+
+    if (isSelecting.current && selectionRect) {
+       const selected = seats.filter(s => 
+          s.isVisible !== false &&
+          s.x < selectionRect.x + selectionRect.w &&
+          s.x + (s.width||100) > selectionRect.x &&
+          s.y < selectionRect.y + selectionRect.h &&
+          s.y + (s.height||150) > selectionRect.y
+       );
+       addToSelection(selected.map(s => s.id));
+    }
+    isSelecting.current = false;
+    setSelectionRect(null);
+  };
+
+  // 1.3 多選拖曳邏輯
+  const handleDragStart = (e: Konva.KonvaEventObject<DragEvent>, seatId: string) => {
+      if (!selectedSeatIds.includes(seatId)) {
+          if (!e.evt.shiftKey) setSelection([seatId]);
+      }
+  };
+
+  const handleDragMove = (e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => {
+      // 找到目前拖曳的座位的新位置
+      const newX = Math.round(e.target.x() / GRID_SIZE) * GRID_SIZE;
+      const newY = Math.round(e.target.y() / GRID_SIZE) * GRID_SIZE;
+      
+      const deltaX = newX - seat.x;
+      const deltaY = newY - seat.y;
+
+      // 移動所有選取的座位 (除了目前這個，因為 Konva 會自己動它)
+      const otherSelectedIds = selectedSeatIds.filter(id => id !== seat.id);
+      if (otherSelectedIds.length > 0) {
+          moveSeatsBatch(otherSelectedIds, deltaX, deltaY);
+      }
+      // 更新自己的 Store 位置
+      updateSeatPosition(seat.id, newX, newY);
+  };
+
+  // 1.8 & 2.2 右鍵選單
+  const handleContextMenu = (e: Konva.KonvaEventObject<PointerEvent>, seat: Seat) => {
+      e.evt.preventDefault();
+      // 如果未選取，先選取
+      if (!selectedSeatIds.includes(seat.id)) {
+          setSelection([seat.id]);
+      }
+      
+      const stage = e.target.getStage();
+      const ptr = stage?.getPointerPosition();
+      if(ptr) {
+         setContextMenu({ x: ptr.x, y: ptr.y, seatId: seat.id });
+         setEditSeatData({ label: seat.label, weight: seat.rankWeight });
+      }
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    if (isEditMode) return;
     const personId = e.dataTransfer.getData('personId');
     if (!personId || !stageRef.current) return;
 
@@ -419,8 +279,6 @@ export const VenueCanvas: React.FC = () => {
     const rawX = (pointer.x - stage.x()) / stage.scaleX();
     const rawY = (pointer.y - stage.y()) / stage.scaleY();
     
-    if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return; 
-
     const virtualPos = { x: rawX, y: rawY };
 
     const closestSeat = seats.find(seat => 
@@ -428,262 +286,311 @@ export const VenueCanvas: React.FC = () => {
       virtualPos.x >= seat.x && virtualPos.x <= seat.x + SEAT_WIDTH && 
       virtualPos.y >= seat.y && virtualPos.y <= seat.y + SEAT_HEIGHT
     );
-    if (closestSeat) { updateSeatAssignment(closestSeat.id, personId); syncSeatingStatus(); }
+    if (closestSeat) { 
+        updateSeatAssignment(closestSeat.id, personId); 
+        syncSeatingStatus(); 
+    }
   };
+
+  // 雙色塊渲染
+  const renderSeatContent = (seat: Seat) => {
+     const occupant = personnel.find(p => p.id === seat.assignedPersonId);
+     const isSelected = selectedSeatIds.includes(seat.id);
+     
+     // 獲取顏色
+     const zoneCat = getCategoryByLabel(seat.zoneCategory || '');
+     const zoneColor = zoneCat ? zoneCat.color : '#cbd5e1'; // 預設灰
+     
+     const personCat = occupant ? getCategoryByLabel(occupant.category) : null;
+     const personBg = personCat ? personCat.personColor : '#ffffff';
+
+     const stroke = seat.isPinned ? '#ef4444' : (isSelected ? '#2563eb' : '#94a3b8');
+     const strokeWidth = isSelected ? 3 : 2;
+
+     return (
+        <Group>
+           {/* 2.5 座位本體 - 雙色塊 */}
+           <Rect 
+             width={SEAT_WIDTH} height={SEAT_HEIGHT} 
+             fill="white"
+             stroke={stroke} strokeWidth={strokeWidth} 
+             cornerRadius={4} 
+             shadowColor="black" shadowOpacity={0.1} shadowBlur={5}
+           />
+           
+           {/* 頂部：座位代碼區塊 (跟隨座位分區顏色) */}
+           <Rect x={0} y={0} width={SEAT_WIDTH} height={25} fill={zoneColor} cornerRadius={[4,4,0,0]} stroke={stroke} strokeWidth={0}/>
+           <Text 
+             text={seat.label} 
+             x={0} y={6} width={SEAT_WIDTH} align="center" 
+             fontSize={12} fontStyle="bold" fill="#334155"
+           />
+
+           {/* 底部：人員資訊 (跟隨人員類別顏色) */}
+           <Rect x={0} y={25} width={SEAT_WIDTH} height={SEAT_HEIGHT-25} fill={personBg} cornerRadius={[0,0,4,4]} />
+
+           {occupant ? (
+               <>
+                 <Text text={occupant.organization} x={4} y={35} width={SEAT_WIDTH-8} align="center" fontSize={11} fill="#64748b" wrap="none" ellipsis/>
+                 <Text text={occupant.name} x={2} y={65} width={SEAT_WIDTH-4} align="center" fontSize={18} fontStyle="bold" fill="#1e293b" wrap="none" ellipsis/>
+                 <Text text={occupant.title} x={4} y={95} width={SEAT_WIDTH-8} align="center" fontSize={12} fill="#334155" wrap="none" ellipsis/>
+                 
+                 {!isEditMode && (
+                   <Group x={80} y={20} onClick={(e) => { e.cancelBubble=true; unassignSeat(seat.id); syncSeatingStatus(); }}>
+                      <Circle radius={8} fill="#ef4444" />
+                      <Text text="×" x={-3} y={-4} fontSize={10} fill="white" fontStyle="bold"/>
+                   </Group>
+                 )}
+               </>
+           ) : (
+               <Text text="空位" x={0} y={80} width={SEAT_WIDTH} align="center" fontSize={14} fill="#cbd5e1"/>
+           )}
+
+           {/* 1.6 編輯模式：重要度顯示 (右下角紅底白字) */}
+           {isEditMode && (
+               <Group x={SEAT_WIDTH-25} y={SEAT_HEIGHT-25}>
+                   <Rect width={25} height={20} fill="#ef4444" cornerRadius={4} />
+                   <Text text={String(seat.rankWeight)} x={0} y={4} width={25} align="center" fill="white" fontSize={10} fontStyle="bold"/>
+               </Group>
+           )}
+
+           {/* 序列排序提示 */}
+           {isSequencing && (
+               <Group x={SEAT_WIDTH/2} y={SEAT_HEIGHT/2}>
+                   <Circle radius={15} fill="rgba(37, 99, 235, 0.9)" />
+                   <Text text={String(rankSequenceCounter)} x={-5} y={-5} fill="white" fontSize={12}/>
+               </Group>
+           )}
+        </Group>
+     );
+  };
+
+  const snapToGrid = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
 
   return (
     <div 
       ref={containerRef} 
-      className="relative w-full h-full bg-slate-200 overflow-hidden"
+      className={`relative w-full h-full bg-slate-200 overflow-hidden ${isEditMode ? 'cursor-crosshair' : 'cursor-default'}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
     >
-      <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
+      <input type="file" ref={fileInputRef} onChange={(e) => {
+          const file = e.target.files?.[0];
+          if(file) {
+              const reader = new FileReader();
+              reader.onload = () => setBackgroundImage(reader.result as string);
+              reader.readAsDataURL(file);
+          }
+      }} className="hidden" accept="image/*" />
 
-      {isConverting && (
-         <div className="absolute inset-0 bg-black/50 z-50 flex flex-col items-center justify-center text-white">
-            <div className="text-2xl animate-bounce mb-2">🖼️</div>
-            <div className="font-bold">正在將 SVG 轉繪為 PNG...</div>
-            <div className="text-sm opacity-80 mt-2">若檔案過大將自動縮小以確保成功</div>
-         </div>
+      {/* 右鍵選單 */}
+      {contextMenu && (
+        <div 
+            className="absolute z-50 bg-white shadow-xl rounded-lg p-3 border border-slate-200 w-64"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+            <div className="flex justify-between items-center mb-2 border-b pb-2">
+                <span className="font-bold text-sm">座位設定 ({selectedSeatIds.length} 個)</span>
+                <button onClick={() => setContextMenu(null)}><X size={14}/></button>
+            </div>
+            
+            {/* 1.8 編輯代碼與重要度 */}
+            {selectedSeatIds.length === 1 && editSeatData && (
+                <div className="space-y-2 mb-3">
+                    <div className="flex gap-2 items-center">
+                        <label className="text-xs w-12">代碼</label>
+                        <input className="border rounded px-2 py-1 text-sm flex-1" value={editSeatData.label} onChange={(e) => setEditSeatData({...editSeatData, label: e.target.value})}/>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                        <label className="text-xs w-12">重要度</label>
+                        <input type="number" className="border rounded px-2 py-1 text-sm flex-1" value={editSeatData.weight} onChange={(e) => setEditSeatData({...editSeatData, weight: Number(e.target.value)})}/>
+                    </div>
+                    <button 
+                        onClick={() => { updateSeatProperties(contextMenu.seatId, editSeatData.label, editSeatData.weight); setContextMenu(null); }}
+                        className="w-full bg-blue-600 text-white text-xs py-1 rounded"
+                    >
+                        更新單一座位
+                    </button>
+                </div>
+            )}
+
+            {/* 2.2 設定座位分區 (多選) */}
+            <div className="space-y-1">
+                <span className="text-xs text-slate-500 block mb-1">設定區塊屬性 (顏色)</span>
+                <div className="grid grid-cols-4 gap-1">
+                    {categories.map(cat => (
+                        <button 
+                            key={cat.id} 
+                            onClick={() => { setSeatZone(selectedSeatIds, cat.label); setContextMenu(null); }}
+                            className="w-full h-6 rounded border border-slate-300 shadow-sm"
+                            style={{ backgroundColor: cat.color }}
+                            title={cat.label}
+                        />
+                    ))}
+                    <button 
+                        onClick={() => { setSeatZone(selectedSeatIds, ''); setContextMenu(null); }}
+                        className="w-full h-6 rounded border border-slate-300 bg-slate-100 text-[10px] flex items-center justify-center"
+                        title="清除"
+                    >
+                        無
+                    </button>
+                </div>
+            </div>
+        </div>
       )}
 
+      {/* 工具列與提示 */}
       <div className="absolute top-4 left-4 z-20">
-        <button 
-          onClick={() => setShowHelp(!showHelp)}
-          className="bg-white p-2 rounded-full shadow-md text-slate-600 hover:text-blue-600 transition"
-          title="操作說明"
-        >
-          <HelpCircle size={24} />
-        </button>
+        <button onClick={() => setShowHelp(!showHelp)} className="bg-white p-2 rounded-full shadow-md text-slate-600 hover:text-blue-600 transition"><HelpCircle size={24} /></button>
       </div>
+
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur px-4 py-1 rounded-full text-xs text-slate-600 shadow border z-10 pointer-events-none">
+          滾輪縮放 • 長按左鍵平移 • Shift+拖曳多選
+      </div>
+
+      {isSequencing && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-2 rounded-full shadow-xl z-30 flex items-center gap-2 animate-pulse">
+              <span className="font-bold">序列排序模式中</span>
+              <span className="text-sm">請依照順序點擊座位 (目前: {rankSequenceCounter})</span>
+          </div>
+      )}
+
+      {isEditMode && !isSequencing && (
+          <div className="absolute top-4 right-4 bg-blue-600 text-white px-4 py-1.5 rounded shadow z-20 text-sm font-bold opacity-80 pointer-events-none">編輯模式 ON</div>
+      )}
 
       <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-6 py-3 rounded-full shadow-2xl z-10 flex items-center gap-6 border border-slate-200">
         <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
-          <button onClick={() => setStageScale(Math.max(0.1, stageScale - 0.1))} className="p-2 hover:bg-slate-100 rounded-full text-slate-600"><Minus size={18}/></button>
+          <button onClick={() => setStageScale(Math.max(0.1, stageScale - 0.1))} className="p-2 hover:bg-slate-100 rounded-full"><Minus size={18}/></button>
           <span className="text-sm font-mono w-12 text-center font-bold text-slate-700">{(stageScale * 100).toFixed(0)}%</span>
-          <button onClick={() => setStageScale(Math.min(5, stageScale + 0.1))} className="p-2 hover:bg-slate-100 rounded-full text-slate-600"><Plus size={18}/></button>
+          <button onClick={() => setStageScale(Math.min(5, stageScale + 0.1))} className="p-2 hover:bg-slate-100 rounded-full"><Plus size={18}/></button>
         </div>
         
-        <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
-           <button 
-             onClick={() => { undo(); syncSeatingStatus(); }}
-             className="flex items-center gap-2 px-3 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition text-sm font-medium"
-             title="復原 (Ctrl+Z)"
-           >
-             <RotateCcw size={18} />
-           </button>
-           <button 
-             onClick={() => setShowBatchModal(true)}
-             className="flex items-center gap-2 px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 transition text-sm font-medium"
-             title="批量生成"
-           >
-             <Grid3X3 size={18} /> 矩陣
-           </button>
-           <button 
-             onClick={handleToggleStage}
-             className="flex items-center gap-2 px-3 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition text-sm font-medium"
-             title="顯示/隱藏 主舞台"
-           >
-             <MonitorStop size={18} /> 舞台
-           </button>
-           <button 
-             onClick={() => setIsEraserMode(!isEraserMode)} 
-             className={`flex items-center gap-2 px-3 py-2 rounded-lg transition text-sm font-medium ${isEraserMode ? 'bg-red-600 text-white shadow-inner' : 'bg-slate-100 text-slate-700 hover:bg-red-50 hover:text-red-600'}`}
-             title="橡皮擦模式"
-           >
-             <Eraser size={18} /> 刪除
-           </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-           <button onClick={() => fileInputRef.current?.click()} className="p-2 hover:bg-slate-100 rounded text-slate-600" title="設定底圖"><ImageIcon size={20} /></button>
-           <button onClick={saveToStorage} className="p-2 hover:bg-slate-100 rounded text-slate-600" title="快速儲存"><Save size={20} /></button>
-           
-           <div className="flex flex-col gap-1">
-             <button onClick={handlePrintPDF} className="flex items-center gap-2 px-4 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 shadow font-bold whitespace-nowrap" title="列印為 PDF (推薦)">
-               <Printer size={14} /> 預覽/列印 PDF
-             </button>
-             <button onClick={handleExportSvgToPng} className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 shadow font-bold whitespace-nowrap" title="輸出 PNG (自動縮放)">
-               <FileText size={14} /> PNG (預覽)
-             </button>
-           </div>
-        </div>
+        {isEditMode && (
+          <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
+             <button onClick={undo} className="p-2 hover:bg-slate-100 rounded" title="復原 (Ctrl+Z)"><RotateCcw size={18} /></button>
+             <button onClick={() => setShowBatchModal(true)} className="p-2 hover:bg-slate-100 rounded text-blue-600" title="矩陣生成"><Grid3X3 size={18} /></button>
+             <button onClick={deleteSelectedSeats} className="p-2 hover:bg-red-50 rounded text-red-600" title="刪除選取 (Del)"><Eraser size={18} /></button>
+             <button onClick={toggleMainStage} className="p-2 hover:bg-slate-100 rounded text-purple-600" title="切換主舞台"><Maximize size={18}/></button>
+          </div>
+        )}
       </div>
-
-      {isEraserMode && <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded-full shadow-lg z-20 animate-pulse pointer-events-none">⚠️ 橡皮擦模式：點擊座位刪除</div>}
-      {placingBatch && <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg z-20 pointer-events-none">🖱️ 移動滑鼠選擇位置，點擊左鍵放置 (ESC 取消)</div>}
 
       {showHelp && (
         <div className="absolute top-16 left-4 bg-white p-5 rounded-xl shadow-xl w-80 z-50 border border-slate-200 text-sm">
-          <div className="flex justify-between items-center mb-2"><h2 className="font-bold text-slate-800">操作說明</h2><button onClick={() => setShowHelp(false)}><X size={18}/></button></div>
-          <ul className="list-disc list-inside space-y-2 text-slate-600">
-            <li><b>左鍵拖曳：</b> 移動畫布</li>
-            <li><b>滾輪：</b> 縮放</li>
-            <li><b>雙擊背景：</b> 新增座位</li>
-            <li><b>拖曳座位/人員：</b> 移動或交換</li>
-            <li><b>右鍵座位：</b> 編輯屬性 (代號/權重)</li>
-            <li><b>輸出圖片：</b> 自動裁切並產生高解析度大圖</li>
-          </ul>
+          <div className="flex justify-between items-center mb-2"><h2 className="font-bold text-slate-800">操作說明 (Gen 2.1)</h2><button onClick={() => setShowHelp(false)}><X size={18}/></button></div>
+          <div className="space-y-3 text-slate-600">
+            <div><strong className="text-blue-600 block mb-1">一般：</strong><ul><li>滾輪：縮放畫布</li><li>長按左鍵：平移畫布</li></ul></div>
+            <div><strong className="text-red-600 block mb-1">編輯模式：</strong><ul><li><strong>多選：</strong>Shift+拖曳 / 框選</li><li><strong>移動：</strong>選取後可整批拖曳</li><li><strong>右鍵：</strong>編輯屬性與顏色</li></ul></div>
+          </div>
         </div>
       )}
 
       {showBatchModal && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
-          <div className="bg-white p-6 rounded-xl shadow-xl w-80">
-            <h3 className="text-lg font-bold mb-4">批量生成</h3>
-            <div className="space-y-4">
-              <div><label className="block text-sm text-slate-600">排數</label><input type="number" value={batchRows} onChange={(e) => setBatchRows(Number(e.target.value))} className="w-full border rounded px-3 py-2" /></div>
-              <div><label className="block text-sm text-slate-600">列數</label><input type="number" value={batchCols} onChange={(e) => setBatchCols(Number(e.target.value))} className="w-full border rounded px-3 py-2" /></div>
-              <div className="flex gap-2 mt-4"><button onClick={() => setShowBatchModal(false)} className="flex-1 py-2 text-slate-500 hover:bg-slate-50 rounded">取消</button><button onClick={handleBatchStart} className="flex-1 py-2 bg-blue-600 text-white rounded">開始</button></div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editingSeat && (
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-xl shadow-xl w-80">
-            <h3 className="text-lg font-bold mb-4">編輯座位</h3>
+            <h3 className="text-lg font-bold mb-4">矩陣生成座位</h3>
             <div className="space-y-4">
-              <div><label className="block text-sm text-slate-600">代號</label><input value={editingSeat.label} onChange={(e) => setEditingSeat({...editingSeat, label: e.target.value})} className="w-full border rounded px-3 py-2" /></div>
-              <div><label className="block text-sm text-slate-600">權重 (1=優先)</label><input type="number" value={editingSeat.rankWeight} onChange={(e) => setEditingSeat({...editingSeat, rankWeight: Number(e.target.value)})} className="w-full border rounded px-3 py-2" /></div>
-              <div className="flex gap-2 mt-4"><button onClick={() => setEditingSeat(null)} className="flex-1 py-2 text-slate-500 hover:bg-slate-50 rounded">取消</button><button onClick={handleEditConfirm} className="flex-1 py-2 bg-blue-600 text-white rounded">確定</button></div>
+              <div><label className="text-sm text-slate-600">排數 (Rows)</label><input type="number" value={batchRows} onChange={(e) => setBatchRows(Number(e.target.value))} className="w-full border rounded px-3 py-2"/></div>
+              <div><label className="text-sm text-slate-600">列數 (Cols)</label><input type="number" value={batchCols} onChange={(e) => setBatchCols(Number(e.target.value))} className="w-full border rounded px-3 py-2"/></div>
+              <div className="flex gap-2 pt-2">
+                  <button onClick={() => setShowBatchModal(false)} className="flex-1 py-2 bg-slate-100 rounded hover:bg-slate-200">取消</button>
+                  <button onClick={() => { setPlacingBatch({rows: batchRows, cols: batchCols}); setShowBatchModal(false); }} className="flex-1 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">開始放置</button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {contextMenu.visible && (
-        <div className="fixed bg-white shadow-xl rounded-lg border border-slate-200 py-1 z-50 w-44" style={{ top: contextMenu.y, left: contextMenu.x }}>
-          <button onClick={() => handleMenuAction('edit')} className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm flex gap-2"><Edit size={14}/> 編輯資訊</button>
-          <button onClick={() => handleMenuAction('pin')} className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm flex gap-2">{seats.find(s => s.id === contextMenu.seatId)?.isPinned ? <><Unlock size={14}/> 解鎖</> : <><Lock size={14}/> 鎖定</>}</button>
-          <button onClick={() => handleMenuAction('unassign')} className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm text-orange-600 flex gap-2"><Minus size={14}/> 清空人員</button>
-          <hr className="my-1"/>
-          <button onClick={() => handleMenuAction('delete')} className="w-full text-left px-4 py-2 hover:bg-red-50 text-sm text-red-600 flex gap-2"><Trash2 size={14}/> 刪除物件</button>
-        </div>
-      )}
-
-      <Stage width={size.width} height={size.height} draggable={!isEraserMode && !placingBatch} ref={stageRef}
-        onWheel={(e) => {
-           e.evt.preventDefault();
-           const stage = stageRef.current;
-           if (!stage) return;
-           const oldScale = stage.scaleX();
-           const pointer = stage.getPointerPosition();
-           if (!pointer) return;
-           const scaleBy = 1.05;
-           const newScale = e.evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
-           setStageScale(newScale);
-           const mousePointTo = { x: (pointer.x - stage.x()) / oldScale, y: (pointer.y - stage.y()) / oldScale };
-           setStagePosition({ x: pointer.x - mousePointTo.x * newScale, y: pointer.y - mousePointTo.y * newScale });
+      <Stage 
+        width={size.width} height={size.height} 
+        ref={stageRef}
+        onMouseDown={handleStageMouseDown}
+        onMouseMove={handleStageMouseMove}
+        onMouseUp={handleStageMouseUp}
+        onWheel={handleWheel}
+        onClick={(e) => {
+             // 雙擊背景新增
+             if (isEditMode && !placingBatch) {
+                const targetName = e.target.name();
+                if (e.target === stageRef.current || targetName === 'venue-background') {
+                   // 這裡做點擊處理，雙擊由 Konva 的 onDblClick 處理
+                }
+             }
+             if (placingBatch && mouseGridPos) {
+                 addSeatBatch(mouseGridPos.x, mouseGridPos.y, placingBatch.rows, placingBatch.cols);
+                 setPlacingBatch(null);
+             }
         }}
-        onDragEnd={(e) => { if (e.target === stageRef.current) setStagePosition({ x: e.target.x(), y: e.target.y() }); }}
-        onClick={handleStageClick}
-        onMouseMove={handleMouseMove}
-        onDblClick={(e) => {
-            if (!placingBatch) {
-              const targetName = e.target.name();
-              if (e.target === stageRef.current || targetName === 'venue-background' || targetName === 'custom-bg-image') {
+        onDblClick={() => {
+             if (isEditMode && !placingBatch) {
                 const ptr = stageRef.current?.getRelativePointerPosition();
                 if (ptr) addSeat(snapToGrid(ptr.x), snapToGrid(ptr.y));
-              }
-            }
+             }
         }}
         scaleX={stageScale} scaleY={stageScale} x={stagePosition.x} y={stagePosition.y}
+        onContextMenu={(e) => e.evt.preventDefault()}
       >
         <Layer>
-          {/* 這個 name="venue-background" 對於輸出功能非常重要 */}
-          <Rect name="venue-background" x={0} y={0} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} fill="white" />
-          {bgImageObj && <KonvaImage name="custom-bg-image" image={bgImageObj} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} opacity={0.8} />}
-          {Array.from({ length: 50 }).map((_, i) => <Line key={`gx-${i}`} points={[i*100,0, i*100,VIRTUAL_HEIGHT]} stroke="#f1f5f9" strokeWidth={1} />)}
-          {Array.from({ length: 40 }).map((_, i) => <Line key={`gy-${i}`} points={[0,i*100, VIRTUAL_WIDTH,i*100]} stroke="#f1f5f9" strokeWidth={1} />)}
+          <Rect name="venue-background" x={0} y={0} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} fill="white" shadowBlur={20} shadowOpacity={0.1}/>
+          {bgImageObj && <KonvaImage image={bgImageObj} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} opacity={0.5} />}
+          
+          {isEditMode && (
+              <Group opacity={0.3}>
+                 {Array.from({ length: 40 }).map((_, i) => <Line key={`gx-${i}`} points={[i*100,0, i*100,VIRTUAL_HEIGHT]} stroke="#cbd5e1" strokeWidth={1} />)}
+                 {Array.from({ length: 30 }).map((_, i) => <Line key={`gy-${i}`} points={[0,i*100, VIRTUAL_WIDTH,i*100]} stroke="#cbd5e1" strokeWidth={1} />)}
+              </Group>
+          )}
+
+          {selectionRect && <Rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.w} height={selectionRect.h} fill="rgba(59, 130, 246, 0.2)" stroke="#2563eb" dash={[4,4]} />}
 
           {placingBatch && mouseGridPos && (
              <Group>
                {Array.from({ length: placingBatch.rows }).map((_, r) => 
-                 Array.from({ length: placingBatch.cols }).map((_, c) => {
-                    const x = mouseGridPos.x + c * (SEAT_WIDTH + 10);
-                    const y = mouseGridPos.y + r * (SEAT_HEIGHT + 10);
-                    const isOverlap = checkBatchOverlap(mouseGridPos.x, mouseGridPos.y, placingBatch.rows, placingBatch.cols);
-                    return (<Rect key={`ghost-${r}-${c}`} x={x} y={y} width={SEAT_WIDTH} height={SEAT_HEIGHT} fill={isOverlap ? 'red' : 'blue'} opacity={0.3} cornerRadius={4} />);
-                 })
+                 Array.from({ length: placingBatch.cols }).map((_, c) => (
+                    <Rect key={`ghost-${r}-${c}`} x={mouseGridPos.x + c * 110} y={mouseGridPos.y + r * 160} width={SEAT_WIDTH} height={SEAT_HEIGHT} fill="blue" opacity={0.3} cornerRadius={4} />
+                 ))
                )}
              </Group>
           )}
 
-          {seats.map((seat) => {
-            const isHidden = seat.isVisible === false;
-            
-            const ghostOpacity = isHidden ? 0.15 : (seat.type === 'shape' ? 0.8 : 1);
-            const dashStyle = isHidden ? [10, 5] : undefined;
-            const ghostColor = isHidden ? "#d1d5db" : "#94a3b8"; 
-            const isShape = seat.type === 'shape';
-            const occupant = personnel.find(p => p.id === seat.assignedPersonId);
-            const bgColor = occupant ? (occupant.category === 'VIP' ? '#fef08a' : '#bfdbfe') : (seat.isPinned ? '#fecaca' : '#ffffff');
-
-            return (
-              <Group
-                key={seat.id} x={seat.x} y={seat.y}
-                draggable={!seat.isPinned && !isEraserMode && !placingBatch && !isHidden}
-                onMouseEnter={() => setHoveredSeatId(seat.id)}
-                onMouseLeave={() => setHoveredSeatId(null)}
-                onContextMenu={(e) => handleContextMenu(e, seat.id)}
-                onClick={(e) => {
-                  if (isEraserMode) { handleEraserClick(seat.id); } 
-                  else if (placingBatch) { /* ... */ }
-                  else { if (e.evt.ctrlKey || e.evt.metaKey) { togglePinSeat(seat.id); e.cancelBubble = true; } }
-                }}
+          {seats.map((seat) => (
+             <Group 
+                key={seat.id} id={seat.id}
+                x={seat.x} y={seat.y}
+                name={seat.type === 'shape' ? 'shape-stage' : 'seat-node'}
+                draggable={isEditMode && !seat.isPinned && !isSequencing} 
+                onDragStart={(e) => handleDragStart(e, seat.id)}
+                onDragMove={(e) => handleDragMove(e, seat)}
                 onDragEnd={(e) => {
-                  const newX = snapToGrid(e.target.x()); const newY = snapToGrid(e.target.y());
-                  if (isShape) { updateSeatPosition(seat.id, newX, newY); return; }
-                  const targetSeat = seats.find(s => s.isVisible !== false && s.id !== seat.id && s.type !== 'shape' && Math.abs(s.x - newX) < SEAT_WIDTH / 2 && Math.abs(s.y - newY) < SEAT_HEIGHT / 2);
-                  if (targetSeat) {
-                    const personA = seat.assignedPersonId; const personB = targetSeat.assignedPersonId;
-                    updateSeatAssignment(seat.id, personB); updateSeatAssignment(targetSeat.id, personA);
-                    e.target.to({ x: seat.x, y: seat.y, duration: 0.2, easing: Konva.Easings.BackEaseOut });
-                    syncSeatingStatus();
-                  } else {
-                    const success = updateSeatPosition(seat.id, newX, newY);
-                    if (success) e.target.to({ x: newX, y: newY, duration: 0.1 });
-                    else e.target.to({ x: seat.x, y: seat.y, duration: 0.2, easing: Konva.Easings.ElasticEaseOut });
-                  }
+                    const newX = snapToGrid(e.target.x());
+                    const newY = snapToGrid(e.target.y());
+                    updateSeatPosition(seat.id, newX, newY);
+                    e.target.to({ x: newX, y: newY, duration: 0.1 });
                 }}
-              >
-                <Rect x={-20} y={-20} width={(seat.width||SEAT_WIDTH) + 40} height={(seat.height||SEAT_HEIGHT) + 40} fill="transparent" />
-                
-                {isShape ? (
-                   <Group opacity={ghostOpacity}>
-                     <Rect width={seat.width || 400} height={seat.height || 150} fill={isHidden ? "transparent" : ghostColor} stroke={seat.isPinned ? "#ef4444" : "#64748b"} strokeWidth={2} cornerRadius={4} dash={dashStyle} />
-                     <Text text={seat.label} width={seat.width || 400} align="center" y={(seat.height || 150) / 2 - 10} fontSize={20} fontStyle="bold" fill={isHidden ? "#94a3b8" : "white"} />
-                   </Group>
-                ) : (
-                   <Group opacity={ghostOpacity}>
-                     <Rect width={SEAT_WIDTH} height={SEAT_HEIGHT} fill={isHidden ? "transparent" : bgColor} stroke={seat.isPinned ? '#ef4444' : '#94a3b8'} strokeWidth={2} cornerRadius={4} shadowBlur={seat.isPinned ? 0 : 4} dash={dashStyle} />
-                     <Rect x={0} y={0} width={SEAT_WIDTH} height={24} fill={isHidden ? "transparent" : (seat.isPinned ? '#ef4444' : '#e2e8f0')} cornerRadius={[4,4,0,0]} />
-                     <Text x={0} y={6} width={SEAT_WIDTH} text={seat.label} align="center" fontSize={12} fontStyle="bold" fill={isHidden ? "#cbd5e1" : (seat.isPinned ? 'white' : '#475569')} />
-                     {!isHidden && seat.isPinned && <Circle x={SEAT_WIDTH - 10} y={12} radius={4} fill="white" />}
-                     {!isHidden && occupant ? (
-                       <>
-                         <Text x={5} y={35} width={SEAT_WIDTH-10} text={occupant.organization} align="center" fontSize={12} fill="#64748b" />
-                         <Text x={0} y={55} width={SEAT_WIDTH} text={occupant.name} align="center" fontSize={20} fontStyle="bold" fill="#1e293b" />
-                         <Text x={5} y={85} width={SEAT_WIDTH-10} text={occupant.title} align="center" fontSize={12} fill="#334155" lineHeight={1.2} />
-                         <Text x={5} y={125} width={SEAT_WIDTH-10} text={occupant.category} align="center" fontSize={10} fill="#94a3b8" />
-                         {hoveredSeatId === seat.id && !isEraserMode && !placingBatch && (
-                           <Group x={-10} y={-10} onClick={(e) => handleRemovePerson(e, seat.id)} onMouseEnter={(e) => { const container = e.target.getStage()?.container(); if(container) container.style.cursor = 'pointer'; }} onMouseLeave={(e) => { const container = e.target.getStage()?.container(); if(container) container.style.cursor = 'default'; }}>
-                              <Circle radius={12} fill="#ef4444" shadowBlur={2} />
-                              <Text text="X" fontSize={14} fill="white" x={-4} y={-5} fontStyle="bold"/>
-                           </Group>
-                         )}
-                       </>
-                     ) : (
-                       <Text x={0} y={70} width={SEAT_WIDTH} text={isHidden ? "" : "空位"} align="center" fontSize={14} fill="#cbd5e1" />
-                     )}
-                   </Group>
-                )}
-              </Group>
-            );
-          })}
+                onClick={(e) => {
+                    if(isSequencing) { e.cancelBubble = true; applyRankToSeat(seat.id); return; }
+                    if(isEditMode) {
+                        e.cancelBubble = true;
+                        if(e.evt.shiftKey || e.evt.ctrlKey) addToSelection([seat.id]);
+                        else setSelection([seat.id]);
+                    }
+                }}
+                onContextMenu={(e) => handleContextMenu(e, seat)}
+             >
+                {seat.type === 'shape' ? (
+                    <Group>
+                         <Rect width={seat.width} height={seat.height} fill="#e2e8f0" stroke="#94a3b8" cornerRadius={4} />
+                         <Text text={seat.label} width={seat.width} align="center" y={(seat.height||0)/2 - 10} fontSize={24} fill="#64748b"/>
+                    </Group>
+                ) : ( renderSeatContent(seat) )}
+             </Group>
+          ))}
+
+          <Transformer ref={transformerRef} boundBoxFunc={(oldBox, newBox) => {
+              if (newBox.width < 50 || newBox.height < 50) return oldBox;
+              return newBox;
+          }}/>
         </Layer>
       </Stage>
     </div>
