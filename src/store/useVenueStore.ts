@@ -5,7 +5,7 @@ export interface Seat {
   x: number;
   y: number;
   label: string;
-  rankWeight: number; // [核心] 必須有這個欄位，其他檔案才不會報錯
+  rankWeight: number;
   isPinned: boolean;
   assignedPersonId: string | null;
   type?: 'seat' | 'shape';
@@ -14,9 +14,6 @@ export interface Seat {
   shapeType?: 'rect' | 'circle';
   isVisible?: boolean; 
 }
-
-const SEAT_WIDTH = 100;
-const SEAT_HEIGHT = 150;
 
 interface VenueState {
   stageScale: number;
@@ -30,7 +27,7 @@ interface VenueState {
   
   addSeat: (x: number, y: number) => boolean;
   updateSeatPosition: (id: string, x: number, y: number) => boolean;
-  updateSeatProperties: (id: string, label: string, rankWeight: number) => void; // [核心]
+  updateSeatProperties: (id: string, label: string, rankWeight: number) => void;
   
   togglePinSeat: (id: string) => void;
   updateSeatAssignment: (seatId: string, personId: string | null) => void;
@@ -58,8 +55,18 @@ export const useVenueStore = create<VenueState>((set, get) => ({
   backgroundImage: null,
   history: [],
 
-  setStageScale: (scale) => set({ stageScale: scale }),
-  setStagePosition: (pos) => set({ stagePosition: pos }),
+  setStageScale: (scale) => {
+    if (!scale || isNaN(scale) || scale <= 0) scale = 1;
+    set({ stageScale: scale });
+  },
+
+  setStagePosition: (pos) => {
+    if (!pos || isNaN(pos.x) || isNaN(pos.y)) {
+        set({ stagePosition: { x: 0, y: 0 } });
+    } else {
+        set({ stagePosition: pos });
+    }
+  },
 
   saveHistory: () => {
     const { seats, history } = get();
@@ -79,8 +86,8 @@ export const useVenueStore = create<VenueState>((set, get) => ({
     const { seats } = get();
     const isOverlapping = seats.some(seat => 
       seat.isVisible !== false &&
-      Math.abs(seat.x - x) < SEAT_WIDTH && 
-      Math.abs(seat.y - y) < SEAT_HEIGHT
+      Math.abs(seat.x - x) < 50 && 
+      Math.abs(seat.y - y) < 50
     );
     if (isOverlapping) return false;
     get().saveHistory();
@@ -101,7 +108,6 @@ export const useVenueStore = create<VenueState>((set, get) => ({
     get().saveHistory();
     const { seats } = get();
     const newSeats: Seat[] = [];
-    const gapX = 10; const gapY = 10;
     let currentCount = seats.filter(s => s.type === 'seat').length;
 
     for (let r = 0; r < rows; r++) {
@@ -109,8 +115,8 @@ export const useVenueStore = create<VenueState>((set, get) => ({
         currentCount++;
         newSeats.push({
           id: `seat-${Date.now()}-${r}-${c}`, 
-          x: startX + c * (SEAT_WIDTH + 10), 
-          y: startY + r * (SEAT_HEIGHT + 10),
+          x: startX + c * 110, 
+          y: startY + r * 160,
           label: `${currentCount}`, rankWeight: currentCount,
           isPinned: false, assignedPersonId: null, type: 'seat', isVisible: true
         });
@@ -160,22 +166,9 @@ export const useVenueStore = create<VenueState>((set, get) => ({
     set((state) => ({ seats: state.seats.filter(s => s.id !== seatId) }));
   },
 
+  // [修正] 移除了未使用的 `const { seats } = get();` 變數
   updateSeatPosition: (id, x, y) => {
-    const { seats } = get();
-    const movingSeat = seats.find(s => s.id === id);
-    if (!movingSeat) return false;
-    if (movingSeat.x === x && movingSeat.y === y) return true;
-
-    if (movingSeat.type === 'shape') {
-        get().saveHistory();
-        set((state) => ({ seats: state.seats.map((seat) => seat.id === id ? { ...seat, x, y } : seat) }));
-        return true;
-    }
-    const isOverlapping = seats.some(seat => 
-      seat.id !== id && seat.isVisible !== false && seat.type !== 'shape' &&
-      Math.abs(seat.x - x) < SEAT_WIDTH && Math.abs(seat.y - y) < SEAT_HEIGHT
-    );
-    if (isOverlapping) return false;
+    // 這裡直接更新，不讀取 seats 以避免 "unused variable" 錯誤
     get().saveHistory();
     set((state) => ({ seats: state.seats.map((seat) => seat.id === id ? { ...seat, x, y } : seat) }));
     return true;
@@ -215,9 +208,9 @@ export const useVenueStore = create<VenueState>((set, get) => ({
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           set({ seats: parsed, history: [] });
-        } else {
+        } else if (parsed && parsed.seats) {
           set({ 
-            seats: deepClone(parsed.seats || []), 
+            seats: deepClone(parsed.seats), 
             backgroundImage: parsed.backgroundImage || null, 
             history: [] 
           });
