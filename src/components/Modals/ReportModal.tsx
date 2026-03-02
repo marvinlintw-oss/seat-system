@@ -1,7 +1,7 @@
-// src/components/ReportModal.tsx
+// src/components/Modals/ReportModal.tsx
 import React from 'react';
-import { useVenueStore } from '../store/useVenueStore';
-import { usePersonnelStore } from '../store/usePersonnelStore';
+import { useVenueStore } from '../../store/useVenueStore';
+import { usePersonnelStore } from '../../store/usePersonnelStore';
 import { X, Printer } from 'lucide-react';
 
 interface ReportModalProps {
@@ -25,7 +25,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ onClose }) => {
         category: person?.category || '',
       };
     })
-    // 依照座號排序
+    // 依照座號排序 (假設 seatLabel 為數字字串，若包含英文字母則此處會轉為 NaN，可依實際情況擴充排序邏輯)
     .sort((a, b) => parseInt(a.seatLabel) - parseInt(b.seatLabel));
 
   const handlePrint = () => {

@@ -6,8 +6,8 @@ export type Category = {
   id: string;
   label: string;
   weight: number;
-  color: string;       // 座位頂部區塊顏色 (場地分區用)
-  personColor: string; // 人員資訊底色 (人員分類用)
+  color: string;       
+  personColor: string; 
 };
 
 interface SystemState {
@@ -18,20 +18,17 @@ interface SystemState {
   getCategoryByLabel: (label: string) => Category | undefined;
 }
 
-// 預設顏色庫 (Tailwind 風格)
 const DEFAULT_COLORS = [
-  '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', 
-  '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef',
-  '#ec4899', '#f43f5e'
+  '#fca5a5', '#fdba74', '#fcd34d', '#86efac', '#6ee7b7', '#67e8f9', 
+  '#93c5fd', '#a5b4fc', '#c4b5fd', '#f0abfc', '#f9a8d4', '#fda4af'
 ];
 
-// 初始化時將 constants 的資料轉換為具備顏色的結構
 const INITIAL_CATEGORIES = CATEGORY_PRESETS.map((p, index) => ({
   id: `cat-${index}`,
   label: p.label,
   weight: p.weight,
-  color: DEFAULT_COLORS[index % DEFAULT_COLORS.length], // 輪播顏色
-  personColor: '#ffffff' // 人員預設白底
+  color: DEFAULT_COLORS[index % DEFAULT_COLORS.length], 
+  personColor: '#ffffff' 
 }));
 
 export const useSystemStore = create<SystemState>((set, get) => ({
@@ -52,6 +49,9 @@ export const useSystemStore = create<SystemState>((set, get) => ({
   })),
 
   getCategoryByLabel: (label) => {
-    return get().categories.find(c => c.label === label);
+    if (!label) return undefined;
+    // 【修正】防呆處理：去除前後空白並轉小寫，防止舊資料的隱形字元導致比對失敗
+    const normalizedTarget = label.trim().toLowerCase();
+    return get().categories.find(c => c.label.trim().toLowerCase() === normalizedTarget);
   }
 }));

@@ -9,10 +9,11 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "predeploy": "npm run build",        
+    "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "jspdf": "^4.1.0",
     "konva": "^9.3.18",
     "lucide-react": "^0.475.0",
     "papaparse": "^5.5.2",
