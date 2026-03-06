@@ -14,7 +14,10 @@ export const SessionTabs: React.FC = () => {
   };
 
   const handleSave = (id: string) => {
-      if (editName.trim()) updateSessionName(id, editName.trim());
+      // 確保不是空白名稱才存檔
+      if (editName.trim()) {
+          updateSessionName(id, editName.trim());
+      }
       setEditingId(null);
   };
 
@@ -31,22 +34,26 @@ export const SessionTabs: React.FC = () => {
                       autoFocus 
                       value={editName} 
                       onChange={e => setEditName(e.target.value)} 
-                      onBlur={() => handleSave(s.id)} 
                       onKeyDown={e => {
-                          // 【修復】阻擋中文輸入法選字時的 Enter 鍵干擾
                           if (e.nativeEvent.isComposing) return;
                           if (e.key === 'Enter') handleSave(s.id);
                           if (e.key === 'Escape') setEditingId(null);
                       }} 
                       className="border border-blue-400 rounded px-1.5 py-0.5 text-sm outline-none text-slate-800 font-normal w-32 shadow-inner" 
                    />
-                   {/* 【新增】明確的綠色打勾儲存按鈕 (使用 onMouseDown 避免 onBlur 搶先觸發) */}
                    <button 
-                      onMouseDown={(e) => { e.preventDefault(); handleSave(s.id); }} 
-                      className="p-1 bg-green-500 text-white rounded hover:bg-green-600 transition shadow-sm"
-                      title="儲存名稱"
+                      onClick={(e) => { e.stopPropagation(); handleSave(s.id); }} 
+                      className="p-1 bg-green-500 text-white rounded hover:bg-green-600 transition shadow-sm flex items-center justify-center"
+                      title="儲存"
                    >
                        <Check size={14}/>
+                   </button>
+                   <button 
+                      onClick={(e) => { e.stopPropagation(); setEditingId(null); }} 
+                      className="p-1 bg-slate-400 text-white rounded hover:bg-slate-500 transition shadow-sm flex items-center justify-center"
+                      title="取消"
+                   >
+                       <X size={14}/>
                    </button>
                </div>
             ) : (
