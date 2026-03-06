@@ -1,7 +1,7 @@
 // src/components/Header/SessionTabs.tsx
 import React, { useState } from 'react';
 import { useProjectStore } from '../../store/useProjectStore';
-import { Plus, X, Edit2 } from 'lucide-react';
+import { Plus, X, Edit2, Check } from 'lucide-react';
 
 export const SessionTabs: React.FC = () => {
   const { sessions, activeSessionId, setActiveSession, addSession, removeSession, updateSessionName } = useProjectStore();
@@ -23,14 +23,32 @@ export const SessionTabs: React.FC = () => {
       {sessions.map(s => (
          <div key={s.id} 
               className={`flex items-center gap-2 px-4 py-2 border-r border-slate-200 cursor-pointer min-w-max transition-colors ${activeSessionId === s.id ? 'bg-white border-t-2 border-t-blue-600 text-blue-700 font-bold' : 'text-slate-600 hover:bg-slate-200'}`} 
-              onClick={() => setActiveSession(s.id)}>
+              onClick={() => { if (editingId !== s.id) setActiveSession(s.id); }}>
             
             {editingId === s.id ? (
-               <input 
-                  autoFocus value={editName} onChange={e => setEditName(e.target.value)} 
-                  onBlur={() => handleSave(s.id)} onKeyDown={e => e.key === 'Enter' && handleSave(s.id)} 
-                  className="border border-blue-300 rounded px-1 py-0.5 text-xs outline-none text-slate-700 font-normal" 
-               />
+               <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                   <input 
+                      autoFocus 
+                      value={editName} 
+                      onChange={e => setEditName(e.target.value)} 
+                      onBlur={() => handleSave(s.id)} 
+                      onKeyDown={e => {
+                          // 【修復】阻擋中文輸入法選字時的 Enter 鍵干擾
+                          if (e.nativeEvent.isComposing) return;
+                          if (e.key === 'Enter') handleSave(s.id);
+                          if (e.key === 'Escape') setEditingId(null);
+                      }} 
+                      className="border border-blue-400 rounded px-1.5 py-0.5 text-sm outline-none text-slate-800 font-normal w-32 shadow-inner" 
+                   />
+                   {/* 【新增】明確的綠色打勾儲存按鈕 (使用 onMouseDown 避免 onBlur 搶先觸發) */}
+                   <button 
+                      onMouseDown={(e) => { e.preventDefault(); handleSave(s.id); }} 
+                      className="p-1 bg-green-500 text-white rounded hover:bg-green-600 transition shadow-sm"
+                      title="儲存名稱"
+                   >
+                       <Check size={14}/>
+                   </button>
+               </div>
             ) : (
                <>
                  <span onDoubleClick={() => handleEdit(s.id, s.name)}>{s.name}</span>
@@ -40,7 +58,7 @@ export const SessionTabs: React.FC = () => {
                </>
             )}
 
-            {sessions.length > 1 && (
+            {sessions.length > 1 && editingId !== s.id && (
                 <button onClick={(e) => { e.stopPropagation(); if(window.confirm('確定刪除此場次？(該場次的專屬座位安排將遺失)')) removeSession(s.id); }} className="text-slate-400 hover:text-red-500 p-0.5 rounded-full hover:bg-slate-100 ml-2"><X size={14}/></button>
             )}
          </div>
