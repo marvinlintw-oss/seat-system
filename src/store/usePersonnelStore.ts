@@ -1,7 +1,7 @@
 // src/store/usePersonnelStore.ts
 import { create } from 'zustand';
 import { useProjectStore } from './useProjectStore';
-import type { Person, Session, Seat } from '../types';
+import type { Person, Session } from '../types';
 
 interface PersonnelState {
   addNewPerson: (name: string, title: string, org: string, category: string, rankScore: number) => void;
@@ -71,97 +71,138 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
     get().updatePersonnelList(newList); 
   },
 
-  // 1. 依區塊排位
+// 1. 依區塊排位 (先找尋對應的 zoneCategory，找不到才隨便坐)
   autoArrangeByCategory: () => {
     const projectState = useProjectStore.getState();
     const activeSession = projectState.sessions.find(s => s.id === projectState.activeSessionId);
     if (!activeSession) return;
 
-    const validSeats = activeSession.venue.seats.filter(s => !s.isPinned && s.type !== 'shape' && s.isVisible !== false);
-    const stage = activeSession.venue.seats.find(s => s.type === 'shape' && s.label === '主舞台');
-    const stageX = stage ? stage.x + (stage.width || 600) / 2 : 1600;
-
-    const sortSeatsFn = (a: any, b: any) => {
-        const weightA = a.rankWeight ?? 9999;
-        const weightB = b.rankWeight ?? 9999;
-        if (weightA !== weightB) return weightA - weightB;
-        return Math.abs((a.x + (a.width || 100) / 2) - stageX) - Math.abs((b.x + (b.width || 100) / 2) - stageX);
-    };
-
-    const availableSeats = [...validSeats].sort(sortSeatsFn);
-    const attendingPeople = projectState.personnel.filter(p => p.attendingSessionIds ? p.attendingSessionIds.includes(projectState.activeSessionId) : true);
-    const sortedPeople = [...attendingPeople].sort((a, b) => b.rankScore - a.rankScore);
+    const newSeats = [...activeSession.venue.seats];
+    const availableSeats = newSeats.filter(s => s.type !== 'shape' && !s.isPinned && s.isVisible !== false);
     
-    const unassignedPeople: Person[] = [];
-    let newSeats: Seat[] = activeSession.venue.seats.map(s => ({ ...s, assignedPersonId: null as string | null }));
+    // 取得有出席本場次、且還沒被釘選座位的人員
+    const pinnedPersonIds = new Set(newSeats.filter(s => s.isPinned && s.assignedPersonId).map(s => s.assignedPersonId));
+    const attendingPeople = projectState.personnel.filter(p => {
+        const isAtt = p.attendingSessionIds ? p.attendingSessionIds.includes(activeSession.id) : true;
+        return isAtt && !pinnedPersonIds.has(p.id);
+    });
 
-    for (const person of sortedPeople) {
-        const matchIndex = availableSeats.findIndex(s => s.zoneCategory && (s.zoneCategory || '').trim() === (person.category || '').trim());
-        if (matchIndex !== -1) {
-            newSeats[newSeats.findIndex(ns => ns.id === availableSeats[matchIndex].id)].assignedPersonId = person.id;
-            availableSeats.splice(matchIndex, 1); 
+    // 【核心邏輯】排序：類別權重(大到小) -> 人員權重(大到小)
+    attendingPeople.sort((a, b) => {
+        const wA = projectState.categories.find(c => c.label === a.category)?.weight || 0;
+        const wB = projectState.categories.find(c => c.label === b.category)?.weight || 0;
+        if (wA !== wB) return wB - wA;
+        return b.rankScore - a.rankScore;
+    });
+
+    // 清空未釘選的座位
+    newSeats.forEach(s => { if (s.type !== 'shape' && !s.isPinned) s.assignedPersonId = null; });
+
+    // 先針對有「區塊屬性」的座位進行媒合
+    const unassignedPeople = [];
+    for (const person of attendingPeople) {
+        const targetSeat = availableSeats.find(s => !s.assignedPersonId && s.zoneCategory === person.category);
+        if (targetSeat) {
+            newSeats.find(s => s.id === targetSeat.id)!.assignedPersonId = person.id;
         } else {
             unassignedPeople.push(person);
         }
     }
 
-    availableSeats.sort((a, b) => (a.zoneCategory ? 1 : 0) - (b.zoneCategory ? 1 : 0) || sortSeatsFn(a, b));
+    // 剩下的人隨機塞入剩下的空位 (優先前排)
+    availableSeats.sort((a, b) => a.y - b.y);
     for (const person of unassignedPeople) {
-        if (availableSeats.length > 0) newSeats[newSeats.findIndex(ns => ns.id === availableSeats.shift()!.id)].assignedPersonId = person.id;
+        const emptySeat = availableSeats.find(s => !s.assignedPersonId);
+        if (emptySeat) newSeats.find(s => s.id === emptySeat.id)!.assignedPersonId = person.id;
     }
 
     updateActiveSession(s => ({ ...s, venue: { ...s.venue, seats: newSeats } }));
     get().syncSeatingStatus();
   },
 
-  // 2. 依重要度排位 (純看優先度序列，不理會區塊)
+  // 2. 依重要度排位 (不看區塊，純看座位優先度與人員權重)
   autoArrangeByImportance: () => {
     const projectState = useProjectStore.getState();
     const activeSession = projectState.sessions.find(s => s.id === projectState.activeSessionId);
     if (!activeSession) return;
 
-    const validSeats = activeSession.venue.seats.filter(s => !s.isPinned && s.type !== 'shape' && s.isVisible !== false);
+    const newSeats = [...activeSession.venue.seats];
+    const availableSeats = newSeats.filter(s => s.type !== 'shape' && !s.isPinned && s.isVisible !== false);
     
-    // 座位：優先依照 rankWeight 排序，其次依 Y 軸(前排)
-    const availableSeats = [...validSeats].sort((a, b) => {
-        const weightA = a.rankWeight ?? 9999;
-        const weightB = b.rankWeight ?? 9999;
-        if (weightA !== weightB) return weightA - weightB;
-        return a.y - b.y;
+    // 座位排序：自訂權重(小到大) -> 前排(Y) -> 左側(X)
+    availableSeats.sort((a, b) => {
+        const wA = a.rankWeight ?? 9999;
+        const wB = b.rankWeight ?? 9999;
+        if (wA !== wB) return wA - wB;
+        if (Math.abs(a.y - b.y) > 20) return a.y - b.y;
+        return a.x - b.x;
     });
 
-    const attendingPeople = projectState.personnel.filter(p => p.attendingSessionIds ? p.attendingSessionIds.includes(projectState.activeSessionId) : true);
-    const sortedPeople = [...attendingPeople].sort((a, b) => b.rankScore - a.rankScore);
-    
-    let newSeats: Seat[] = activeSession.venue.seats.map(s => ({ ...s, assignedPersonId: null as string | null }));
-    for (const person of sortedPeople) {
-        if (availableSeats.length > 0) newSeats[newSeats.findIndex(ns => ns.id === availableSeats.shift()!.id)].assignedPersonId = person.id;
+    const pinnedPersonIds = new Set(newSeats.filter(s => s.isPinned && s.assignedPersonId).map(s => s.assignedPersonId));
+    const attendingPeople = projectState.personnel.filter(p => {
+        const isAtt = p.attendingSessionIds ? p.attendingSessionIds.includes(activeSession.id) : true;
+        return isAtt && !pinnedPersonIds.has(p.id);
+    });
+
+    // 排序：類別權重(大到小) -> 人員權重(大到小)
+    attendingPeople.sort((a, b) => {
+        const wA = projectState.categories.find(c => c.label === a.category)?.weight || 0;
+        const wB = projectState.categories.find(c => c.label === b.category)?.weight || 0;
+        if (wA !== wB) return wB - wA;
+        return b.rankScore - a.rankScore;
+    });
+
+    newSeats.forEach(s => { if (s.type !== 'shape' && !s.isPinned) s.assignedPersonId = null; });
+
+    let seatIndex = 0;
+    for (const person of attendingPeople) {
+        if (seatIndex < availableSeats.length) {
+            newSeats.find(s => s.id === availableSeats[seatIndex].id)!.assignedPersonId = person.id;
+            seatIndex++;
+        }
     }
 
     updateActiveSession(s => ({ ...s, venue: { ...s.venue, seats: newSeats } }));
     get().syncSeatingStatus();
   },
 
-  // 3. 依位置排位 (純看空間座標，由前到後、由左到右)
+  // 3. 依位置排位 (純看空間座標)
   autoArrangeByPosition: () => {
     const projectState = useProjectStore.getState();
     const activeSession = projectState.sessions.find(s => s.id === projectState.activeSessionId);
     if (!activeSession) return;
 
-    const validSeats = activeSession.venue.seats.filter(s => !s.isPinned && s.type !== 'shape' && s.isVisible !== false);
+    const newSeats = [...activeSession.venue.seats];
+    const availableSeats = newSeats.filter(s => s.type !== 'shape' && !s.isPinned && s.isVisible !== false);
     
-    // 座位：純粹依照空間座標排序 (Y軸優先，X軸其次)
-    const availableSeats = [...validSeats].sort((a, b) => {
+    // 座位：純粹依照空間座標排序 (前排優先，然後由左至右)
+    availableSeats.sort((a, b) => {
         if (Math.abs(a.y - b.y) > 20) return a.y - b.y;
         return a.x - b.x;
     });
 
-    const attendingPeople = projectState.personnel.filter(p => p.attendingSessionIds ? p.attendingSessionIds.includes(projectState.activeSessionId) : true);
-    const sortedPeople = [...attendingPeople].sort((a, b) => b.rankScore - a.rankScore);
-    
-    let newSeats: Seat[] = activeSession.venue.seats.map(s => ({ ...s, assignedPersonId: null as string | null }));
-    for (const person of sortedPeople) {
-        if (availableSeats.length > 0) newSeats[newSeats.findIndex(ns => ns.id === availableSeats.shift()!.id)].assignedPersonId = person.id;
+    const pinnedPersonIds = new Set(newSeats.filter(s => s.isPinned && s.assignedPersonId).map(s => s.assignedPersonId));
+    const attendingPeople = projectState.personnel.filter(p => {
+        const isAtt = p.attendingSessionIds ? p.attendingSessionIds.includes(activeSession.id) : true;
+        return isAtt && !pinnedPersonIds.has(p.id);
+    });
+
+    // 排序：類別權重(大到小) -> 人員權重(大到小)
+    attendingPeople.sort((a, b) => {
+        const wA = projectState.categories.find(c => c.label === a.category)?.weight || 0;
+        const wB = projectState.categories.find(c => c.label === b.category)?.weight || 0;
+        if (wA !== wB) return wB - wA;
+        return b.rankScore - a.rankScore;
+    });
+
+    newSeats.forEach(s => { if (s.type !== 'shape' && !s.isPinned) s.assignedPersonId = null; });
+
+    let seatIndex = 0;
+    for (const person of attendingPeople) {
+        if (seatIndex < availableSeats.length) {
+            newSeats.find(s => s.id === availableSeats[seatIndex].id)!.assignedPersonId = person.id;
+            seatIndex++;
+        }
     }
 
     updateActiveSession(s => ({ ...s, venue: { ...s.venue, seats: newSeats } }));

@@ -17,8 +17,17 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [localList, setLocalList] = useState<Person[]>([]);
 
   React.useEffect(() => {
-    if (isOpen) setLocalList(JSON.parse(JSON.stringify(personnel)));
-  }, [isOpen, personnel]);
+    if (isOpen) {
+        // 開啟時自動進行雙重排序
+        const sortedList = [...personnel].sort((a, b) => {
+            const wA = categories.find(c => c.label === a.category)?.weight || 0;
+            const wB = categories.find(c => c.label === b.category)?.weight || 0;
+            if (wA !== wB) return wB - wA; 
+            return b.rankScore - a.rankScore;
+        });
+        setLocalList(JSON.parse(JSON.stringify(sortedList)));
+    }
+  }, [isOpen, personnel, categories]);
 
   if (!isOpen) return null;
 

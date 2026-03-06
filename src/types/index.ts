@@ -18,7 +18,7 @@ export type Category = {
   label: string;
   weight: number;
   color: string;
-  personColor: string;
+  personColor?: string;
 };
 
 // 3. 場地物件：座位或形狀
@@ -62,4 +62,14 @@ export interface Project {
   
   sessions: Session[];       // 【多場次陣列】
   activeSessionId: string;   // 記錄目前正在檢視/編輯的場次
+}
+// 雲端存檔會用到的資料結構定義
+export interface ProjectData {
+  version?: string;
+  projectName?: string;
+  fileId?: string | null;
+  personnel?: Person[];
+  categories?: Category[];
+  sessions?: Session[];
+  activeSessionId?: string;
 }
