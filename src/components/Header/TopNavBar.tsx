@@ -1,8 +1,8 @@
 // src/components/Header/TopNavBar.tsx
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useProjectStore } from '../../store/useProjectStore';
 import { saveFileToDrive, showDrivePicker, loadFileFromDrive } from '../../utils/googleDriveAPI';
-import { Cloud, Settings, CheckCircle, FolderOpen, Copy, HardDriveDownload } from 'lucide-react';
+import { Cloud, Settings, CheckCircle, FolderOpen, Copy, HardDriveDownload, Upload } from 'lucide-react';
 import { CategoryModal } from '../Modals/CategoryModal';
 
 export const TopNavBar: React.FC = () => {
@@ -10,8 +10,10 @@ export const TopNavBar: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  
+  // 【新增】用來觸發選擇本機檔案的參考
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 【新增】本地端緊急備份機制：將專案打包成 .seatproject 下載
   const downloadLocalBackup = () => {
       const state = useProjectStore.getState();
       const projectDataToSave = {
@@ -28,9 +30,34 @@ export const TopNavBar: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${state.projectName || '未命名專案'}_緊急備份_${Date.now()}.seatproject`;
+      link.download = `${state.projectName || '未命名專案'}_備份_${Date.now()}.seatproject`;
       link.click();
       URL.revokeObjectURL(url);
+  };
+
+  // 【新增】處理本機檔案讀取的邏輯
+  const handleLocalLoad = (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+          try {
+              const data = JSON.parse(e.target?.result as string);
+              loadProjectData(data);
+              
+              // 因為是本機檔案，我們要把網址列的雲端 fileId 清除，避免下次按「儲存」時覆蓋到雲端別人的檔案
+              window.history.pushState({ path: window.location.pathname }, '', window.location.pathname);
+              setFileId(null);
+              
+          } catch (error) {
+              alert('檔案格式錯誤，無法讀取此專案檔！');
+          }
+      };
+      reader.readAsText(file);
+      
+      // 清空 input，確保下次選同一個檔案時依然能觸發 onChange
+      event.target.value = '';
   };
 
   const performSave = async (targetFileId: string | null | undefined, targetName: string) => {
@@ -63,7 +90,6 @@ export const TopNavBar: React.FC = () => {
     } catch (error) {
       console.error(error);
       setSaveStatus('error');
-      // 【防護機制】如果雲端存檔失敗，立刻觸發本地下載！
       alert('⚠️ 雲端存檔失敗！可能是連線中斷或授權過期。\n\n系統已自動為您下載一份【本機備份檔 (.seatproject)】以防止資料遺失。請妥善保存該檔案！');
       downloadLocalBackup();
     } finally {
@@ -114,19 +140,40 @@ export const TopNavBar: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {fileId && <span className="text-xs text-slate-400 mr-2">已連線至雲端</span>}
+          {fileId ? (
+              <span className="text-xs text-emerald-400 mr-2 flex items-center gap-1"><Cloud size={12}/> 已連線雲端</span>
+          ) : (
+              <span className="text-xs text-slate-400 mr-2">本機未連線</span>
+          )}
           
-          <button onClick={handleLoad} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50">
-            <FolderOpen size={16} className="text-amber-400" /> 載入
+          {/* 隱藏的檔案上傳輸入框 */}
+          <input 
+             type="file" 
+             accept=".seatproject,.json" 
+             ref={fileInputRef} 
+             onChange={handleLocalLoad} 
+             className="hidden" 
+          />
+
+          {/* 本機載入按鈕 */}
+          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 border border-slate-500 hover:border-slate-400">
+            <Upload size={16} className="text-amber-200" /> 載入本機
           </button>
 
-          {/* 新增：手動本地端備份按鈕 */}
-          <button onClick={downloadLocalBackup} title="下載整份專案到本機電腦" className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 border border-slate-500 hover:border-slate-400 ml-1">
-            <HardDriveDownload size={16} className="text-blue-300" /> 本機備份
+          {/* 雲端載入按鈕 */}
+          <button onClick={handleLoad} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50 border border-slate-500 hover:border-slate-400 ml-1">
+            <FolderOpen size={16} className="text-amber-400" /> 載入雲端
+          </button>
+
+          <div className="w-px h-6 bg-slate-600 mx-1"></div>
+
+          {/* 手動本地端備份按鈕 */}
+          <button onClick={downloadLocalBackup} title="下載整份專案到本機電腦" className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600">
+            <HardDriveDownload size={16} className="text-blue-300" /> 下載備份
           </button>
 
           <button onClick={handleSave} disabled={isProcessing} className={`flex items-center gap-1.5 text-sm px-4 py-1.5 rounded transition font-bold shadow-sm disabled:opacity-50 ml-1 ${saveStatus === 'success' ? 'bg-green-600 hover:bg-green-500' : 'bg-blue-600 hover:bg-blue-500'}`}>
-            {isProcessing ? <span className="animate-pulse">處理中...</span> : saveStatus === 'success' ? <><CheckCircle size={16} /> 成功</> : <><Cloud size={16} /> 儲存</>}
+            {isProcessing ? <span className="animate-pulse">處理中...</span> : saveStatus === 'success' ? <><CheckCircle size={16} /> 成功</> : <><Cloud size={16} /> 儲存雲端</>}
           </button>
 
           <button onClick={handleSaveAs} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50 ml-1">
