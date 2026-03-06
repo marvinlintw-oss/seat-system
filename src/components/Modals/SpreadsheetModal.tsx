@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { usePersonnelStore } from '../../store/usePersonnelStore';
 import { useProjectStore } from '../../store/useProjectStore';
-import { X, Save, Trash2, Plus, Table, CheckSquare } from 'lucide-react';
+import { X, Save, Trash2, Plus, Table } from 'lucide-react';
 import type { Person } from '../../types';
 
 interface Props {
