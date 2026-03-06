@@ -39,7 +39,8 @@ export const SeatNode: React.FC<SeatNodeProps> = ({
   const zoneCat = categories.find(c => c.label === seat.zoneCategory);
   const zoneColor = zoneCat ? zoneCat.color : '#ffffff'; 
   const personCat = occupant ? categories.find(c => c.label === occupant.category) : null;
-  const personBg = personCat ? personCat.color : '#ffffff';
+  // 【修復】優先讀取獨立的名牌顏色 (personColor)，若無則退回使用區塊顏色 (color)
+  const personBg = personCat ? (personCat.personColor || personCat.color) : '#ffffff';
 
   const stroke = seat.isPinned ? '#ef4444' : (isSelected ? '#2563eb' : '#94a3b8');
   const strokeWidth = isSelected ? 3 : 2;
