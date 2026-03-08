@@ -3,13 +3,16 @@
 // 1. 共用資源：人員
 export type Person = {
   id: string;
+  externalId: string;    // 系統底層 UUID (供 Google Sheet 雙向同步使用)
+  serialNumber?: string; // 【新增】給使用者看與對應的自訂序號
+  remarks?: string;      // 【新增】備註 (例如：吃素、行動不便)
   name: string;
   title: string;
   organization: string;
   rankScore: number;
   category: string;
   isSeated: boolean; 
-  attendingSessionIds?: string[]; // 【新增】記錄參與的場次 ID 陣列
+  attendingSessionIds?: string[];
 };
 
 // 2. 共用資源：類別
@@ -30,7 +33,7 @@ export type Seat = {
   rankWeight: number;
   isPinned: boolean;
   assignedPersonId: string | null;
-  type?: 'seat' | 'shape' | 'fixed' | 'photo'; // 保留了拍照站位的擴充性
+  type?: 'seat' | 'shape' | 'fixed' | 'photo';
   width?: number;
   height?: number;
   shapeType?: 'rect' | 'circle';
@@ -38,10 +41,10 @@ export type Seat = {
   zoneCategory?: string;
 };
 
-// 4. 【全新】單一場次定義 (每個場次有獨立的場地與座位)
+// 4. 單一場次定義
 export interface Session {
   id: string;
-  name: string;      // 例如：'開幕式', '大合照', '分論壇A'
+  name: string;
   venue: {
     seats: Seat[];
     backgroundImage: string | null;
@@ -50,19 +53,18 @@ export interface Session {
   };
 }
 
-// 5. 【全新】最高層級的專案定義
+// 5. 最高層級的專案定義
 export interface Project {
   version: string;
   timestamp: string;
-  fileId?: string;           // 未來綁定 Google Drive 的檔案 ID
-  projectName: string;       // 例如：'2026 地方創生論壇'
-  
-  personnel: Person[];       // 【大水庫】這場活動的所有長官名單
-  categories: Category[];    // 【共用類別】
-  
-  sessions: Session[];       // 【多場次陣列】
-  activeSessionId: string;   // 記錄目前正在檢視/編輯的場次
+  fileId?: string;
+  projectName: string;
+  personnel: Person[];
+  categories: Category[];
+  sessions: Session[];
+  activeSessionId: string;
 }
+
 // 雲端存檔會用到的資料結構定義
 export interface ProjectData {
   version?: string;

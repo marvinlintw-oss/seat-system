@@ -1,5 +1,5 @@
 // src/components/VenueCanvas/VenueCanvas.tsx
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import Konva from 'konva';
 import { Stage, Layer, Rect, Group, Line, Image as KonvaImage, Transformer } from 'react-konva';
 import { useVenueStore, VIRTUAL_WIDTH, VIRTUAL_HEIGHT } from '../../store/useVenueStore';
@@ -11,7 +11,8 @@ import { GridGenerateModal } from '../Modals/GridGenerateModal';
 import { Minus, Plus, Grid3X3, Eraser, RotateCcw, HelpCircle, X, Maximize } from 'lucide-react';
 import type { Seat } from '../../types';
 
-const GRID_SIZE = 20;
+// 【修改】模組 A：將基礎網格改為 10px
+const GRID_SIZE = 10;
 
 export const VenueCanvas: React.FC = () => {
   const stageRef = useRef<Konva.Stage>(null);
@@ -94,7 +95,8 @@ export const VenueCanvas: React.FC = () => {
         if (e.key === 'Delete') { deleteSelectedSeats(); syncSeatingStatus(); }
         if (e.ctrlKey || e.metaKey) {
           if (e.key === 'c') copySelection();
-          if (e.key === 'v') { pasteSelection(100, 100); syncSeatingStatus(); }
+          // 【修改】模組 A：複製貼上時，產生的偏移量設定為網格的倍數 (20px)
+          if (e.key === 'v') { pasteSelection(20, 20); syncSeatingStatus(); }
           if (e.key === 'z') { e.preventDefault(); undo(); syncSeatingStatus(); }
         }
         if (e.key === 'Escape') {
@@ -164,7 +166,7 @@ export const VenueCanvas: React.FC = () => {
       }
   };
 
-  const handleSeatContextMenu = (e: Konva.KonvaEventObject<PointerEvent>, seat: Seat) => {
+  const handleSeatContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, seat: Seat) => {
       e.evt.preventDefault();
       e.cancelBubble = true;
       if (!selectedSeatIds.includes(seat.id)) setSelection([seat.id]);
@@ -174,7 +176,7 @@ export const VenueCanvas: React.FC = () => {
          setContextMenu({ x: ptr.x, y: ptr.y, seatId: seat.id });
          setBatchEditData({});
       }
-  };
+  }, [selectedSeatIds, setSelection]);
 
   const handleBatchUpdate = () => {
       selectedSeatIds.forEach(id => {
@@ -182,54 +184,6 @@ export const VenueCanvas: React.FC = () => {
       });
       if (batchEditData.zone !== undefined) setSeatZone(selectedSeatIds, batchEditData.zone);
       setContextMenu(null);
-  };
-
-  const handleSeatDragStart = (e: Konva.KonvaEventObject<DragEvent>, seatId: string) => {
-      if (isEditMode) {
-          let currentSelection = selectedSeatIds;
-          if (!selectedSeatIds.includes(seatId)) {
-              if (!e.evt.shiftKey) {
-                  setSelection([seatId]);
-                  currentSelection = [seatId];
-              } else {
-                  addToSelection([seatId]);
-                  currentSelection = [...selectedSeatIds, seatId];
-              }
-          }
-          
-          const startPositions: Record<string, {x: number, y: number}> = {};
-          currentSelection.forEach(id => {
-              const s = seats.find(seat => seat.id === id);
-              if (s) startPositions[id] = { x: s.x, y: s.y };
-          });
-          dragStartPosRef.current = startPositions;
-      }
-  };
-
-  const handleSeatDragMove = (e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => {
-      if (!isEditMode) return;
-      
-      const targetX = snapToGrid(e.target.x());
-      const targetY = snapToGrid(e.target.y());
-      e.target.x(targetX);
-      e.target.y(targetY);
-
-      const startPos = dragStartPosRef.current[seat.id];
-      if (startPos) {
-          const deltaX = targetX - startPos.x;
-          const deltaY = targetY - startPos.y;
-
-          selectedSeatIds.forEach(id => {
-              if (id !== seat.id) {
-                  const otherNode = stageRef.current?.findOne(`#${id}`);
-                  const otherStartPos = dragStartPosRef.current[id];
-                  if (otherNode && otherStartPos) {
-                      otherNode.x(otherStartPos.x + deltaX);
-                      otherNode.y(otherStartPos.y + deltaY);
-                  }
-              }
-          });
-      }
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -250,6 +204,145 @@ export const VenueCanvas: React.FC = () => {
     );
     if (closestSeat) { updateSeatAssignment(closestSeat.id, personId); syncSeatingStatus(); }
   };
+
+  // 【新增】模組 B：使用 useCallback 包裝所有的 SeatNode 事件處理器，避免擊穿 React.memo
+  const handleSeatDragStart = useCallback((e: Konva.KonvaEventObject<DragEvent>, seatId: string) => {
+      if (isEditMode) {
+          let currentSelection = selectedSeatIds;
+          if (!selectedSeatIds.includes(seatId)) {
+              if (!e.evt.shiftKey) {
+                  setSelection([seatId]);
+                  currentSelection = [seatId];
+              } else {
+                  addToSelection([seatId]);
+                  currentSelection = [...selectedSeatIds, seatId];
+              }
+          }
+          
+          const startPositions: Record<string, {x: number, y: number}> = {};
+          currentSelection.forEach(id => {
+              const s = seats.find(seat => seat.id === id);
+              if (s) startPositions[id] = { x: s.x, y: s.y };
+          });
+          dragStartPosRef.current = startPositions;
+      }
+  }, [isEditMode, selectedSeatIds, seats, addToSelection, setSelection]);
+
+  const handleSeatDragMove = useCallback((e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => {
+      if (!isEditMode) return;
+      
+      // 【修改】模組 A：Shift 微調機制與 10px 強制對齊
+      const targetX = e.evt.shiftKey ? e.target.x() : Math.round(e.target.x() / 10) * 10;
+      const targetY = e.evt.shiftKey ? e.target.y() : Math.round(e.target.y() / 10) * 10;
+      
+      e.target.x(targetX);
+      e.target.y(targetY);
+
+      const startPos = dragStartPosRef.current[seat.id];
+      if (startPos) {
+          const deltaX = targetX - startPos.x;
+          const deltaY = targetY - startPos.y;
+
+          selectedSeatIds.forEach(id => {
+              if (id !== seat.id) {
+                  const otherNode = stageRef.current?.findOne(`#${id}`);
+                  const otherStartPos = dragStartPosRef.current[id];
+                  if (otherNode && otherStartPos) {
+                      otherNode.x(otherStartPos.x + deltaX);
+                      otherNode.y(otherStartPos.y + deltaY);
+                  }
+              }
+          });
+      }
+  }, [isEditMode, selectedSeatIds]);
+
+  const handleSeatDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => {
+      if (isEditMode) {
+          // 【修改】模組 A：最終落地座標套用 10px 對齊與 Shift 判斷
+          const targetX = e.evt.shiftKey ? e.target.x() : Math.round(e.target.x() / 10) * 10;
+          const targetY = e.evt.shiftKey ? e.target.y() : Math.round(e.target.y() / 10) * 10;
+          e.target.x(targetX);
+          e.target.y(targetY);
+
+          const startPos = dragStartPosRef.current[seat.id];
+          if (startPos) {
+              const deltaX = targetX - startPos.x;
+              const deltaY = targetY - startPos.y;
+
+              if (deltaX !== 0 || deltaY !== 0) {
+                  const otherSelectedIds = selectedSeatIds.filter(id => id !== seat.id);
+                  if (otherSelectedIds.length > 0) {
+                      moveSeatsBatch(otherSelectedIds, deltaX, deltaY);
+                  }
+                  updateSeatPosition(seat.id, targetX, targetY);
+              }
+          }
+          dragStartPosRef.current = {};
+      } else {
+          // 非編輯模式下的人員互換
+          const stage = stageRef.current;
+          const pointer = stage?.getPointerPosition();
+          if (pointer && stage) {
+              const rawX = (pointer.x - stage.x()) / stage.scaleX();
+              const rawY = (pointer.y - stage.y()) / stage.scaleY();
+              const targetSeat = seats.find(s => 
+                  s.isVisible !== false && s.type !== 'shape' && 
+                  rawX >= s.x && rawX <= s.x + SEAT_WIDTH && 
+                  rawY >= s.y && rawY <= s.y + SEAT_HEIGHT
+              );
+              if (targetSeat && targetSeat.id !== seat.id) {
+                  const tempPersonId = targetSeat.assignedPersonId;
+                  updateSeatAssignment(targetSeat.id, seat.assignedPersonId);
+                  updateSeatAssignment(seat.id, tempPersonId);
+                  syncSeatingStatus();
+              }
+          }
+          e.target.to({ x: seat.x, y: seat.y, duration: 0.1 });
+      }
+  }, [isEditMode, seats, selectedSeatIds, moveSeatsBatch, updateSeatPosition, updateSeatAssignment, syncSeatingStatus]);
+
+  const handleSeatClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>, seat: Seat) => {
+      if(isSequencing) { e.cancelBubble = true; applyRankToSeat(seat.id); return; }
+      if(isNumbering) { e.cancelBubble = true; applyNumberToSeat(seat.id); return; }
+      if(isEditMode) {
+          e.cancelBubble = true;
+          if(e.evt.shiftKey || e.evt.ctrlKey) addToSelection([seat.id]);
+          else setSelection([seat.id]);
+      }
+  }, [isSequencing, isNumbering, isEditMode, applyRankToSeat, applyNumberToSeat, addToSelection, setSelection]);
+
+  const handleSeatUnassign = useCallback((seatId: string) => { 
+      unassignSeat(seatId); 
+      syncSeatingStatus(); 
+  }, [unassignSeat, syncSeatingStatus]);
+
+  const handleSeatTransformEnd = useCallback((e: Konva.KonvaEventObject<Event>, seatToTransform: Seat) => {
+      if (seatToTransform.type === 'shape') {
+          const node = e.target;
+          const scaleX = node.scaleX();
+          const scaleY = node.scaleY();
+          node.scaleX(1);
+          node.scaleY(1);
+          const newWidth = Math.round((seatToTransform.width || 600) * scaleX);
+          const newHeight = Math.round((seatToTransform.height || 150) * scaleY);
+          // 【修改】模組 A：形狀縮放後同樣強制 10px 對齊
+          const newX = Math.round(node.x() / 10) * 10;
+          const newY = Math.round(node.y() / 10) * 10;
+          
+          const state = useProjectStore.getState();
+          useProjectStore.setState({
+              sessions: state.sessions.map(s => s.id === activeSessionId ? {
+                  ...s,
+                  venue: {
+                      ...s.venue,
+                      seats: s.venue.seats.map(st => st.id === seatToTransform.id ? { 
+                          ...st, x: newX, y: newY, width: newWidth, height: newHeight 
+                      } : st)
+                  }
+              } : s)
+          });
+      }
+  }, [activeSessionId]);
 
   return (
     <div 
@@ -336,7 +429,6 @@ export const VenueCanvas: React.FC = () => {
         )}
       </div>
 
-      {/* 【核心防呆機制】等待 size 大於 0 之後，才真正掛載 Stage 避免 Canvas 崩潰 */}
       {size.width > 0 && size.height > 0 && (
         <Stage 
           width={size.width} height={size.height} 
@@ -384,85 +476,11 @@ export const VenueCanvas: React.FC = () => {
                   numberSequenceCounter={numberSequenceCounter}
                   onDragStart={handleSeatDragStart}
                   onDragMove={handleSeatDragMove}
-                  onDragEnd={(e) => {
-                      if (isEditMode) {
-                          const targetX = snapToGrid(e.target.x());
-                          const targetY = snapToGrid(e.target.y());
-                          e.target.x(targetX);
-                          e.target.y(targetY);
-
-                          const startPos = dragStartPosRef.current[seat.id];
-                          if (startPos) {
-                              const deltaX = targetX - startPos.x;
-                              const deltaY = targetY - startPos.y;
-
-                              if (deltaX !== 0 || deltaY !== 0) {
-                                  const otherSelectedIds = selectedSeatIds.filter(id => id !== seat.id);
-                                  if (otherSelectedIds.length > 0) {
-                                      moveSeatsBatch(otherSelectedIds, deltaX, deltaY);
-                                  }
-                                  updateSeatPosition(seat.id, targetX, targetY);
-                              }
-                          }
-                          dragStartPosRef.current = {};
-                      } else {
-                          const stage = stageRef.current;
-                          const pointer = stage?.getPointerPosition();
-                          if (pointer && stage) {
-                              const rawX = (pointer.x - stage.x()) / stage.scaleX();
-                              const rawY = (pointer.y - stage.y()) / stage.scaleY();
-                              const targetSeat = seats.find(s => 
-                                  s.isVisible !== false && s.type !== 'shape' && 
-                                  rawX >= s.x && rawX <= s.x + SEAT_WIDTH && 
-                                  rawY >= s.y && rawY <= s.y + SEAT_HEIGHT
-                              );
-                              if (targetSeat && targetSeat.id !== seat.id) {
-                                  const tempPersonId = targetSeat.assignedPersonId;
-                                  updateSeatAssignment(targetSeat.id, seat.assignedPersonId);
-                                  updateSeatAssignment(seat.id, tempPersonId);
-                                  syncSeatingStatus();
-                              }
-                          }
-                          e.target.to({ x: seat.x, y: seat.y, duration: 0.1 });
-                      }
-                  }}
-                  onClick={(e) => {
-                      if(isSequencing) { e.cancelBubble = true; applyRankToSeat(seat.id); return; }
-                      if(isNumbering) { e.cancelBubble = true; applyNumberToSeat(seat.id); return; }
-                      if(isEditMode) {
-                          e.cancelBubble = true;
-                          if(e.evt.shiftKey || e.evt.ctrlKey) addToSelection([seat.id]);
-                          else setSelection([seat.id]);
-                      }
-                  }}
+                  onDragEnd={handleSeatDragEnd}
+                  onClick={handleSeatClick}
                   onContextMenu={handleSeatContextMenu}
-                  onUnassign={(seatId) => { unassignSeat(seatId); syncSeatingStatus(); }}
-                  onTransformEnd={(e, seatToTransform) => {
-                      if (seatToTransform.type === 'shape') {
-                          const node = e.target;
-                          const scaleX = node.scaleX();
-                          const scaleY = node.scaleY();
-                          node.scaleX(1);
-                          node.scaleY(1);
-                          const newWidth = Math.round((seatToTransform.width || 600) * scaleX);
-                          const newHeight = Math.round((seatToTransform.height || 150) * scaleY);
-                          const newX = snapToGrid(node.x());
-                          const newY = snapToGrid(node.y());
-                          
-                          const state = useProjectStore.getState();
-                          useProjectStore.setState({
-                              sessions: state.sessions.map(s => s.id === state.activeSessionId ? {
-                                  ...s,
-                                  venue: {
-                                      ...s.venue,
-                                      seats: s.venue.seats.map(st => st.id === seatToTransform.id ? { 
-                                          ...st, x: newX, y: newY, width: newWidth, height: newHeight 
-                                      } : st)
-                                  }
-                              } : s)
-                          });
-                      }
-                  }}
+                  onUnassign={handleSeatUnassign}
+                  onTransformEnd={handleSeatTransformEnd}
                />
             ))}
 

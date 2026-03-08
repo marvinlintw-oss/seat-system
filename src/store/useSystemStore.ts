@@ -12,7 +12,7 @@ interface SystemState {
   getCategoryByLabel: (label: string) => Category | undefined;
 }
 
-export const useSystemStore = create<SystemState>((set, get) => ({
+export const useSystemStore = create<SystemState>((_set, _get) => ({
   // 初始化預設類別 (若專案是空的)
   initDefaultCategories: () => {
     const { categories } = useProjectStore.getState();

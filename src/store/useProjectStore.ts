@@ -110,7 +110,11 @@ export const useProjectStore = create<ProjectState>((set) => ({
     version: data.version || '4.0',
     projectName: data.projectName || '未命名活動專案',
     fileId: data.fileId || null,
-    personnel: data.personnel || [],
+    // 【修改】模組 E1：為舊有未配置 externalId 的人員，自動補上 UUID 防呆
+    personnel: (data.personnel || []).map(p => ({
+      ...p,
+      externalId: p.externalId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ext-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`)
+    })),
     categories: data.categories || DEFAULT_CATEGORIES,
     sessions: data.sessions && data.sessions.length > 0 ? data.sessions : [{
       id: defaultSessionId,

@@ -2,10 +2,9 @@
 
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-// 因為是內部系統，我們申請完整的 drive 權限，確保長官透過網址能直接讀取您共用的檔案
-const SCOPES = 'https://www.googleapis.com/auth/drive'; 
+// 【修改】擴充權限：加入 spreadsheets 的讀寫權限
+const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets'; 
 
-// 宣告全域變數避免 TypeScript 報錯 (不需額外 npm install types)
 declare global {
   interface Window {
     gapi: any;
@@ -16,9 +15,6 @@ declare global {
 let tokenClient: any = null;
 let accessToken: string | null = null;
 
-/**
- * 步驟一：初始化 Google API (載入必要的外部腳本)
- */
 export const initGoogleAPI = (): Promise<void> => {
   return new Promise((resolve, reject) => {
     if (window.gapi && window.google) {
@@ -64,9 +60,6 @@ export const initGoogleAPI = (): Promise<void> => {
   });
 };
 
-/**
- * 步驟二：呼叫登入視窗 (取得 Token)
- */
 export const requireLogin = (): Promise<string> => {
   return new Promise((resolve, reject) => {
     if (accessToken) {
@@ -77,7 +70,6 @@ export const requireLogin = (): Promise<string> => {
       reject('Google API 尚未初始化');
       return;
     }
-    // 覆寫 callback 來捕捉這次登入的 token
     tokenClient.callback = (resp: any) => {
       if (resp.error) {
         reject(resp.error);
@@ -90,14 +82,15 @@ export const requireLogin = (): Promise<string> => {
   });
 };
 
-/**
- * 步驟三：呼叫 Google Drive Picker (選檔器)
- */
-export const showDrivePicker = async (): Promise<{ id: string; name: string } | null> => {
+export const showDrivePicker = async (type: 'json' | 'spreadsheet' = 'json'): Promise<{ id: string; name: string } | null> => {
   const token = await requireLogin();
   return new Promise((resolve) => {
     const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS);
-    view.setMimeTypes('application/json'); // 只顯示 JSON 檔
+    if (type === 'json') {
+      view.setMimeTypes('application/json');
+    } else {
+      view.setMimeTypes('application/vnd.google-apps.spreadsheet');
+    }
 
     const picker = new window.google.picker.PickerBuilder()
       .addView(view)
@@ -116,46 +109,60 @@ export const showDrivePicker = async (): Promise<{ id: string; name: string } | 
   });
 };
 
-/**
- * 步驟四：從雲端讀取 JSON 檔案內容
- */
 export const loadFileFromDrive = async (fileId: string): Promise<any> => {
   const token = await requireLogin();
   const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!response.ok) throw new Error('無法讀取檔案，可能無權限或檔案不存在');
+  if (!response.ok) throw new Error('無法讀取檔案');
   return await response.json();
 };
 
-/**
- * 步驟五：存檔到雲端 (若是新專案則建立新檔，若有 fileId 則覆蓋舊檔)
- */
 export const saveFileToDrive = async (fileName: string, data: any, existingFileId?: string): Promise<string> => {
   const token = await requireLogin();
   const fileContent = JSON.stringify(data);
-  const metadata = {
-    name: `${fileName}.json`,
-    mimeType: 'application/json',
-  };
+  const metadata = { name: `${fileName}.json`, mimeType: 'application/json' };
 
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   form.append('file', new Blob([fileContent], { type: 'application/json' }));
 
   const url = existingFileId 
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart` // 更新現有檔案
-    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';                  // 建立新檔案
-
-  const method = existingFileId ? 'PATCH' : 'POST';
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
 
   const response = await fetch(url, {
-    method,
+    method: existingFileId ? 'PATCH' : 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form
   });
 
   if (!response.ok) throw new Error('存檔失敗');
   const result = await response.json();
-  return result.id; // 回傳檔案的 Google Drive ID
+  return result.id;
+};
+
+// 【新增】Google Sheets 讀取 (模組 E4)
+export const fetchSpreadsheetData = async (spreadsheetId: string, range: string): Promise<string[][]> => {
+  const token = await requireLogin();
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error('無法讀取試算表');
+  const result = await response.json();
+  return result.values || [];
+};
+
+// 【新增】Google Sheets 寫入 (模組 E4)
+export const updateSpreadsheetData = async (spreadsheetId: string, range: string, values: string[][]): Promise<void> => {
+  const token = await requireLogin();
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`, {
+    method: 'PUT',
+    headers: { 
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ values })
+  });
+  if (!response.ok) throw new Error('無法寫入試算表');
 };
