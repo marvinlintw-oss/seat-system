@@ -1,8 +1,9 @@
 // src/components/Header/TopNavBar.tsx
 import React, { useState, useRef } from 'react';
 import { useProjectStore } from '../../store/useProjectStore';
-import { saveFileToDrive, showDrivePicker, loadFileFromDrive } from '../../utils/googleDriveAPI';
-import { Cloud, Settings, CheckCircle, FolderOpen, Copy, HardDriveDownload, Upload } from 'lucide-react';
+// 【引入】清除 Token 的函式與重新登入的函式
+import { saveFileToDrive, showDrivePicker, loadFileFromDrive, showFolderPicker, clearGoogleToken, requireLogin } from '../../utils/googleDriveAPI';
+import { Cloud, Settings, CheckCircle, FolderOpen, Copy, HardDriveDownload, Upload, RefreshCw } from 'lucide-react';
 import { CategoryModal } from '../Modals/CategoryModal';
 
 export const TopNavBar: React.FC = () => {
@@ -11,7 +12,6 @@ export const TopNavBar: React.FC = () => {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   
-  // 【新增】用來觸發選擇本機檔案的參考
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const downloadLocalBackup = () => {
@@ -35,7 +35,6 @@ export const TopNavBar: React.FC = () => {
       URL.revokeObjectURL(url);
   };
 
-  // 【新增】處理本機檔案讀取的邏輯
   const handleLocalLoad = (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
       if (!file) return;
@@ -46,7 +45,6 @@ export const TopNavBar: React.FC = () => {
               const data = JSON.parse(e.target?.result as string);
               loadProjectData(data);
               
-              // 因為是本機檔案，我們要把網址列的雲端 fileId 清除，避免下次按「儲存」時覆蓋到雲端別人的檔案
               window.history.pushState({ path: window.location.pathname }, '', window.location.pathname);
               setFileId(null);
               
@@ -55,31 +53,69 @@ export const TopNavBar: React.FC = () => {
           }
       };
       reader.readAsText(file);
-      
-      // 清空 input，確保下次選同一個檔案時依然能觸發 onChange
       event.target.value = '';
   };
 
-  const performSave = async (targetFileId: string | null | undefined, targetName: string) => {
+  // 【核心新增】不重整網頁，手動強制重連 Google 雲端
+  const handleReconnect = async () => {
+      try {
+          setIsProcessing(true);
+          clearGoogleToken(); // 丟棄過期的 Token
+          await requireLogin(); // 觸發 Google 驗證視窗
+          alert('✅ 雲端重新連線成功！您可以繼續儲存與操作了。');
+      } catch (error) {
+          console.error('重新連線失敗:', error);
+          alert('❌ 重新連線失敗，請檢查網路或允許瀏覽器彈出視窗。');
+      } finally {
+          setIsProcessing(false);
+      }
+  };
+
+  const performSave = async (isSaveAs: boolean) => {
     setIsProcessing(true);
     setSaveStatus('idle');
     try {
+      let targetFolderId: string | undefined = undefined;
+      let finalFileName = projectName;
+
+      if (isSaveAs || !fileId) {
+          const newName = window.prompt('請輸入雲端專案檔名：', isSaveAs ? `${projectName} (複製)` : projectName);
+          if (!newName) {
+              setIsProcessing(false);
+              return; 
+          }
+          finalFileName = newName;
+          setProjectName(finalFileName); 
+
+          const chooseFolder = window.confirm('是否要指定儲存的 Google Drive 資料夾？\n\n(按「確定」開啟選擇器，按「取消」則儲存於預設根目錄)');
+          if (chooseFolder) {
+              const folder = await showFolderPicker();
+              if (folder) {
+                  targetFolderId = folder.id;
+              }
+          }
+      }
+
       const state = useProjectStore.getState();
       const projectDataToSave = {
         version: state.version,
         timestamp: new Date().toISOString(),
-        fileId: targetFileId || null,
-        projectName: targetName,
+        fileId: isSaveAs ? null : state.fileId,
+        projectName: finalFileName,
         personnel: state.personnel,
         categories: state.categories,
         sessions: state.sessions,
         activeSessionId: state.activeSessionId,
       };
 
-      const idToPass = targetFileId || undefined; 
-      const savedFileId = await saveFileToDrive(targetName, projectDataToSave, idToPass);
+      const savedFileId = await saveFileToDrive(
+          finalFileName, 
+          projectDataToSave, 
+          isSaveAs ? undefined : (fileId || undefined), 
+          targetFolderId
+      );
       
-      if (targetFileId !== savedFileId && savedFileId) {
+      if (savedFileId) {
         setFileId(savedFileId);
         const newUrl = `${window.location.origin}${window.location.pathname}?fileId=${savedFileId}`;
         window.history.pushState({ path: newUrl }, '', newUrl);
@@ -90,35 +126,10 @@ export const TopNavBar: React.FC = () => {
     } catch (error) {
       console.error(error);
       setSaveStatus('error');
-      alert('⚠️ 雲端存檔失敗！可能是連線中斷或授權過期。\n\n系統已自動為您下載一份【本機備份檔 (.seatproject)】以防止資料遺失。請妥善保存該檔案！');
+      // 【終極防護】存檔失敗時，自動丟棄過期的 Token
+      clearGoogleToken();
+      alert('⚠️ 雲端存檔失敗！可能是連線中斷或登入授權已過期。\n\n系統已自動為您下載一份【本機備份檔 (.seatproject)】以防止資料遺失。\n\n💡 解決方式：請點擊上方的「重新連線」按鈕，或直接再按一次「儲存雲端」，系統將自動為您重新驗證身份！');
       downloadLocalBackup();
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleSave = () => performSave(fileId, projectName);
-
-  const handleSaveAs = () => {
-    const newName = window.prompt('請輸入新專案名稱：', `${projectName} (複製)`);
-    if (!newName) return;
-    setProjectName(newName);
-    performSave(undefined, newName); 
-  };
-
-  const handleLoad = async () => {
-    try {
-      setIsProcessing(true);
-      const pickedFile = await showDrivePicker();
-      if (pickedFile) {
-        const data = await loadFileFromDrive(pickedFile.id);
-        loadProjectData({ ...data, fileId: pickedFile.id });
-        const newUrl = `${window.location.origin}${window.location.pathname}?fileId=${pickedFile.id}`;
-        window.history.pushState({ path: newUrl }, '', newUrl);
-      }
-    } catch (error) {
-      console.error(error);
-      alert('讀取檔案失敗！');
     } finally {
       setIsProcessing(false);
     }
@@ -140,43 +151,62 @@ export const TopNavBar: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {fileId ? (
-              <span className="text-xs text-emerald-400 mr-2 flex items-center gap-1"><Cloud size={12}/> 已連線雲端</span>
-          ) : (
-              <span className="text-xs text-slate-400 mr-2">本機未連線</span>
-          )}
           
-          {/* 隱藏的檔案上傳輸入框 */}
-          <input 
-             type="file" 
-             accept=".seatproject,.json" 
-             ref={fileInputRef} 
-             onChange={handleLocalLoad} 
-             className="hidden" 
-          />
+          {/* 【升級】雲端狀態區塊，加入重新連線按鈕 */}
+          <div className="flex items-center gap-2 mr-2 bg-slate-700/50 px-2 py-1 rounded-md">
+              {fileId ? (
+                  <span className="text-xs text-emerald-400 flex items-center gap-1"><Cloud size={12}/> 已連線雲端</span>
+              ) : (
+                  <span className="text-xs text-slate-400 flex items-center gap-1">本機未連線</span>
+              )}
+              <div className="w-px h-3 bg-slate-500 mx-1"></div>
+              <button 
+                  onClick={handleReconnect} 
+                  disabled={isProcessing}
+                  className="flex items-center gap-1 text-[10px] font-bold text-blue-300 hover:text-white transition disabled:opacity-50" 
+                  title="重新取得授權 / 恢復連線"
+              >
+                  <RefreshCw size={12} className={isProcessing ? "animate-spin" : ""} /> 重新連線
+              </button>
+          </div>
+          
+          <input type="file" accept=".seatproject,.json" ref={fileInputRef} onChange={handleLocalLoad} className="hidden" />
 
-          {/* 本機載入按鈕 */}
           <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 border border-slate-500 hover:border-slate-400">
             <Upload size={16} className="text-amber-200" /> 載入本機
           </button>
 
-          {/* 雲端載入按鈕 */}
-          <button onClick={handleLoad} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50 border border-slate-500 hover:border-slate-400 ml-1">
+          <button onClick={async () => {
+            try {
+              setIsProcessing(true);
+              const pickedFile = await showDrivePicker();
+              if (pickedFile) {
+                const data = await loadFileFromDrive(pickedFile.id);
+                loadProjectData({ ...data, fileId: pickedFile.id });
+                const newUrl = `${window.location.origin}${window.location.pathname}?fileId=${pickedFile.id}`;
+                window.history.pushState({ path: newUrl }, '', newUrl);
+              }
+            } catch (error) {
+              console.error(error);
+              alert('讀取檔案失敗！');
+            } finally {
+              setIsProcessing(false);
+            }
+          }} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50 border border-slate-500 hover:border-slate-400 ml-1">
             <FolderOpen size={16} className="text-amber-400" /> 載入雲端
           </button>
 
           <div className="w-px h-6 bg-slate-600 mx-1"></div>
 
-          {/* 手動本地端備份按鈕 */}
           <button onClick={downloadLocalBackup} title="下載整份專案到本機電腦" className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600">
             <HardDriveDownload size={16} className="text-blue-300" /> 下載備份
           </button>
 
-          <button onClick={handleSave} disabled={isProcessing} className={`flex items-center gap-1.5 text-sm px-4 py-1.5 rounded transition font-bold shadow-sm disabled:opacity-50 ml-1 ${saveStatus === 'success' ? 'bg-green-600 hover:bg-green-500' : 'bg-blue-600 hover:bg-blue-500'}`}>
+          <button onClick={() => performSave(false)} disabled={isProcessing} className={`flex items-center gap-1.5 text-sm px-4 py-1.5 rounded transition font-bold shadow-sm disabled:opacity-50 ml-1 ${saveStatus === 'success' ? 'bg-green-600 hover:bg-green-500' : 'bg-blue-600 hover:bg-blue-500'}`}>
             {isProcessing ? <span className="animate-pulse">處理中...</span> : saveStatus === 'success' ? <><CheckCircle size={16} /> 成功</> : <><Cloud size={16} /> 儲存雲端</>}
           </button>
 
-          <button onClick={handleSaveAs} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50 ml-1">
+          <button onClick={() => performSave(true)} disabled={isProcessing} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded transition font-bold bg-slate-700 hover:bg-slate-600 disabled:opacity-50 ml-1">
             <Copy size={16} className="text-emerald-400" /> 另存新檔
           </button>
           

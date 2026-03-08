@@ -1,6 +1,6 @@
 // src/components/Modals/SpreadsheetModal.tsx
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom'; // 【新增】引入 createPortal
+import { createPortal } from 'react-dom';
 import { usePersonnelStore } from '../../store/usePersonnelStore';
 import { useProjectStore } from '../../store/useProjectStore';
 import { X, Save, Trash2, Plus, Table, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
@@ -54,7 +54,6 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const handleSave = () => { updatePersonnelList(localList); onClose(); };
 
-  // 【優化】新增資料插入在第一筆 (最上方)
   const handleAddRow = () => {
     const defaultCat = categories[0];
     const generateUUID = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ext-${Date.now()}`;
@@ -76,9 +75,9 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setLocalList(prevList => {
       const newList = [...prevList];
       newList.sort((a, b) => {
-        let valA: any = key === 'categoryWeight' ? (categories.find(c => c.label === a.category)?.weight || 0) : a[key];
-        let valB: any = key === 'categoryWeight' ? (categories.find(c => c.label === b.category)?.weight || 0) : b[key];
-        
+        let valA: any = key === 'categoryWeight' ? (categories.find(c => c.label === a.category)?.weight || 0) : a[key as keyof Person];
+        let valB: any = key === 'categoryWeight' ? (categories.find(c => c.label === b.category)?.weight || 0) : b[key as keyof Person];
+
         if (!valA) valA = ''; if (!valB) valB = '';
         if (typeof valA === 'string' && typeof valB === 'string') {
           return direction === 'asc' ? valA.localeCompare(valB, 'zh-TW') : valB.localeCompare(valA, 'zh-TW');
@@ -92,14 +91,13 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
     });
   };
 
-  const renderSortIcon = (key: keyof Person | 'categoryWeight') => {
-    if (sortConfig?.key !== key) return <ArrowUpDown size={14} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity"/>;
-    return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-blue-600"/> : <ArrowDown size={14} className="text-blue-600"/>;
+  const renderSortIcon = (key: string) => {
+    if (sortConfig?.key !== key) return <ArrowUpDown size={14} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity inline ml-1"/>;
+    return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-blue-600 inline ml-1"/> : <ArrowDown size={14} className="text-blue-600 inline ml-1"/>;
   };
 
   const allSessionIds = sessions.map(s => s.id);
 
-  // 【關鍵】使用 createPortal 掛載到 document.body，且 z-index 設為 z-[100] 徹底防蓋版
   return createPortal(
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] flex flex-col h-[90vh]">
@@ -109,7 +107,6 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
              <Table size={20} className="text-green-600"/> 總名單編輯 (矩陣編輯與排序模式)
           </h2>
           <div className="flex gap-3">
-            {/* 【優化】把新增按鈕移到最上方 */}
             <button onClick={handleAddRow} className="flex items-center gap-2 bg-white border border-slate-300 text-slate-600 px-4 py-2 text-sm font-bold rounded-lg hover:bg-slate-100 transition shadow-sm">
               <Plus size={16}/> 插入新資料 (至最上方)
             </button>
@@ -172,10 +169,11 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
             <tbody>
               {localList.map(p => {
                 const isValidCategory = categories.some(c => c.label === p.category);
+                
                 return (
                 <tr key={p.id} className="hover:bg-blue-50 transition-colors border-b border-slate-200 group">
                   <td className="p-0 bg-white border-r border-slate-200 group-hover:bg-blue-50 transition-colors">
-                    <input value={p.serialNumber || ''} onChange={e => handleChange(p.id, 'serialNumber', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent font-mono text-slate-600 focus:ring-2 focus:ring-blue-200" placeholder="對外序號"/>
+                    <input value={p.serialNumber || ''} onChange={e => handleChange(p.id, 'serialNumber', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent font-mono text-slate-600 focus:ring-2 focus:ring-blue-200" placeholder="序號"/>
                   </td>
                   <td className="p-0 sticky left-0 z-20 bg-white border-r border-slate-200 group-hover:bg-blue-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] transition-colors">
                     <input value={p.name} onChange={e => handleChange(p.id, 'name', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent font-bold text-slate-800 focus:ring-2 focus:ring-blue-200" placeholder="姓名"/>
@@ -210,7 +208,7 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
                   <td className="p-0 border-l border-slate-200"><input type="number" value={p.rankScore} onChange={e => handleChange(p.id, 'rankScore', Number(e.target.value))} className="w-full text-center outline-none bg-transparent font-mono text-blue-600 font-bold focus:ring-2 focus:ring-blue-100 py-2.5"/></td>
                   <td className="p-0 border-l border-slate-200">
-                    <input value={p.remarks || ''} onChange={e => handleChange(p.id, 'remarks', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent text-amber-600 focus:ring-2 focus:ring-amber-200" placeholder="例如：行動不便、吃素..."/>
+                    <input value={p.remarks || ''} onChange={e => handleChange(p.id, 'remarks', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent text-amber-600 focus:ring-2 focus:ring-amber-200" placeholder="例如：行動不便..."/>
                   </td>
                   <td className="p-0 border-l border-slate-200 text-center">
                       <button onClick={() => setLocalList(prev => prev.filter(item => item.id !== p.id))} className="text-slate-300 hover:text-red-500 hover:bg-red-50 w-full h-full py-2.5 transition-colors flex justify-center items-center"><Trash2 size={16}/></button>

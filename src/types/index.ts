@@ -1,11 +1,10 @@
 // src/types/index.ts
 
-// 1. 共用資源：人員
 export type Person = {
   id: string;
-  externalId: string;    // 系統底層 UUID (供 Google Sheet 雙向同步使用)
-  serialNumber?: string; // 【新增】給使用者看與對應的自訂序號
-  remarks?: string;      // 【新增】備註 (例如：吃素、行動不便)
+  externalId: string;    
+  serialNumber?: string; 
+  remarks?: string;      
   name: string;
   title: string;
   organization: string;
@@ -13,9 +12,12 @@ export type Person = {
   category: string;
   isSeated: boolean; 
   attendingSessionIds?: string[];
+  photoData?: Record<string, { 
+    batches: string[]; 
+    position: string; 
+  }>;
 };
 
-// 2. 共用資源：類別
 export type Category = {
   id: string;
   label: string;
@@ -24,7 +26,6 @@ export type Category = {
   personColor?: string;
 };
 
-// 3. 場地物件：座位或形狀
 export type Seat = {
   id: string;
   x: number;
@@ -33,7 +34,7 @@ export type Seat = {
   rankWeight: number;
   isPinned: boolean;
   assignedPersonId: string | null;
-  type?: 'seat' | 'shape' | 'fixed' | 'photo';
+  type?: 'seat' | 'shape' | 'fixed' | 'photo'; // 支援 'photo' 站位點
   width?: number;
   height?: number;
   shapeType?: 'rect' | 'circle';
@@ -41,31 +42,42 @@ export type Seat = {
   zoneCategory?: string;
 };
 
-// 4. 單一場次定義
+// 【全新加入】獨立的拍照梯次子畫布結構
+export interface PhotoBatch {
+  id: string;
+  name: string;    // 例如：'一拍', '二拍'
+  color: string;   // 梯次主題色，用來視覺區分與防呆
+  spots: Seat[];   // 專屬這個梯次的站位點資料
+}
+
 export interface Session {
   id: string;
-  name: string;
+  name: string;      
   venue: {
     seats: Seat[];
     backgroundImage: string | null;
     stageScale: number;
     stagePosition: { x: number; y: number };
   };
+  // 【全新加入】一個場次可以擁有多個拍照梯次
+  photoBatches?: PhotoBatch[]; 
 }
 
-// 5. 最高層級的專案定義
 export interface Project {
   version: string;
   timestamp: string;
-  fileId?: string;
-  projectName: string;
-  personnel: Person[];
-  categories: Category[];
-  sessions: Session[];
-  activeSessionId: string;
+  fileId?: string;           
+  projectName: string;       
+  personnel: Person[];       
+  categories: Category[];    
+  sessions: Session[];       
+  activeSessionId: string;   
+  
+  // 【全新加入】畫布視角控制狀態
+  activeViewMode?: 'seat' | 'photo';  // 當前是排座位還是排拍照？
+  activePhotoBatchId?: string | null; // 當前正在檢視哪一個梯次？
 }
 
-// 雲端存檔會用到的資料結構定義
 export interface ProjectData {
   version?: string;
   projectName?: string;
@@ -74,4 +86,6 @@ export interface ProjectData {
   categories?: Category[];
   sessions?: Session[];
   activeSessionId?: string;
+  activeViewMode?: 'seat' | 'photo';
+  activePhotoBatchId?: string | null;
 }

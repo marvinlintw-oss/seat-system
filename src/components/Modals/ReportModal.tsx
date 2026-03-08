@@ -2,20 +2,22 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useProjectStore } from '../../store/useProjectStore';
-import { X, Printer, ArrowUpDown, ArrowUp, ArrowDown, Download } from 'lucide-react';
+import { X, Printer, ArrowUpDown, ArrowUp, ArrowDown, Download, Camera, LayoutGrid } from 'lucide-react';
 
 interface Props { isOpen: boolean; onClose: () => void; }
 
-type SortKey = 'seatLabel' | 'serialNumber' | 'personName' | 'personTitle' | 'personOrg' | 'category';
+type SortKey = 'seatLabel' | 'serialNumber' | 'personName' | 'personTitle' | 'personOrg' | 'category' | 'batchName' | 'spotLabel';
 
 export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const { personnel, sessions, activeSessionId, projectName } = useProjectStore();
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
+  const [reportType, setReportType] = useState<'seat' | 'photo'>('seat'); 
   
   if (!isOpen) return null;
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
-  const seats = activeSession?.venue.seats || [];
+  const mainSeats = activeSession?.venue.seats || [];
+  const photoBatches = activeSession?.photoBatches || [];
 
   const handleSort = (key: SortKey) => {
     let direction: 'asc' | 'desc' = 'asc';
@@ -28,102 +30,110 @@ export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
     return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-blue-600 inline ml-1"/> : <ArrowDown size={14} className="text-blue-600 inline ml-1"/>;
   };
 
-  const assignedSeats = seats
-    .filter(seat => seat.assignedPersonId)
-    .map(seat => {
-      const person = personnel.find(p => p.id === seat.assignedPersonId);
-      return {
-        seatLabel: seat.label,
-        serialNumber: person?.serialNumber || '', // 【新增】抓取序號
-        personName: person?.name || '未知',
-        personTitle: person?.title || '',
-        personOrg: person?.organization || '',
-        category: person?.category || '',
-      };
-    })
-    .sort((a, b) => {
-        if (!sortConfig) {
-            const numA = parseInt(a.seatLabel); const numB = parseInt(b.seatLabel);
-            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-            return a.seatLabel.localeCompare(b.seatLabel);
-        }
-        const { key, direction } = sortConfig;
-        const valA = a[key]; const valB = b[key];
-        
-        if (key === 'seatLabel' || key === 'serialNumber') {
-            const numA = parseInt(valA); const numB = parseInt(valB);
-            if (!isNaN(numA) && !isNaN(numB)) return direction === 'asc' ? numA - numB : numB - numA;
-        }
-        return direction === 'asc' ? valA.localeCompare(valB, 'zh-TW') : valB.localeCompare(valA, 'zh-TW');
-    });
+  // 【核心修改】動態產生報表資料
+  let listData: any[] = [];
 
-  // 【新增】匯出 CSV 函式
-  const handleExportCSV = () => {
-      const BOM = '\uFEFF'; // 加入 BOM 確保 Excel 打開不會中文亂碼
-      let csvContent = BOM + '座位,序號,姓名,職稱,單位,類別\n';
-      
-      assignedSeats.forEach(item => {
-          // 使用雙引號包覆，避免內部文字含有逗號導致換欄
-          const row = [
-              `"${item.seatLabel}"`,
-              `"${item.serialNumber}"`,
-              `"${item.personName}"`,
-              `"${item.personTitle}"`,
-              `"${item.personOrg}"`,
-              `"${item.category}"`
-          ].join(',');
-          csvContent += row + '\n';
+  if (reportType === 'seat') {
+      mainSeats.filter(s => s.assignedPersonId).forEach(seat => {
+          const p = personnel.find(person => person.id === seat.assignedPersonId);
+          if (p) {
+              listData.push({
+                  seatLabel: seat.label, serialNumber: p.serialNumber || '',
+                  personName: p.name, personTitle: p.title, personOrg: p.organization, category: p.category
+              });
+          }
       });
+  } else {
+      // 拍照動線表：遍歷所有梯次
+      photoBatches.forEach(batch => {
+          batch.spots.filter(s => s.assignedPersonId).forEach(spot => {
+              const p = personnel.find(person => person.id === spot.assignedPersonId);
+              const originalSeat = mainSeats.find(s => s.assignedPersonId === p?.id);
+              if (p) {
+                  listData.push({
+                      batchName: batch.name, spotLabel: spot.label,
+                      seatLabel: originalSeat ? originalSeat.label : '未入座',
+                      serialNumber: p.serialNumber || '', personName: p.name,
+                      personTitle: p.title, personOrg: p.organization
+                  });
+              }
+          });
+      });
+  }
+
+  listData.sort((a, b) => {
+      if (!sortConfig) {
+          if (reportType === 'seat') {
+              const numA = parseInt(a.seatLabel); const numB = parseInt(b.seatLabel);
+              if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+              return a.seatLabel.localeCompare(b.seatLabel);
+          } else {
+              const batchDiff = a.batchName.localeCompare(b.batchName);
+              if (batchDiff !== 0) return batchDiff;
+              const spotA = parseInt(a.spotLabel); const spotB = parseInt(b.spotLabel);
+              if (!isNaN(spotA) && !isNaN(spotB)) return spotA - spotB;
+              return a.spotLabel.localeCompare(b.spotLabel);
+          }
+      }
+      
+      const { key, direction } = sortConfig;
+      const valA = a[key as keyof typeof a] || ''; 
+      const valB = b[key as keyof typeof b] || '';
+      
+      if (key === 'seatLabel' || key === 'spotLabel' || key === 'serialNumber') {
+          const numA = parseInt(valA as string); const numB = parseInt(valB as string);
+          if (!isNaN(numA) && !isNaN(numB)) return direction === 'asc' ? numA - numB : numB - numA;
+      }
+      return direction === 'asc' ? (valA as string).localeCompare(valB as string, 'zh-TW') : (valB as string).localeCompare(valA as string, 'zh-TW');
+  });
+
+  const handleExportCSV = () => {
+      const BOM = '\uFEFF'; 
+      let csvContent = BOM;
+      
+      if (reportType === 'seat') {
+          csvContent += '座位,序號,姓名,職稱,單位,類別\n';
+          listData.forEach(item => {
+              csvContent += `"${item.seatLabel}","${item.serialNumber}","${item.personName}","${item.personTitle}","${item.personOrg}","${item.category}"\n`;
+          });
+      } else {
+          csvContent += '梯次,上台站位,原座位,序號,姓名,職稱,單位\n';
+          listData.forEach(item => {
+              csvContent += `"${item.batchName}","${item.spotLabel}","${item.seatLabel}","${item.serialNumber}","${item.personName}","${item.personTitle}","${item.personOrg}"\n`;
+          });
+      }
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${projectName}_${activeSession?.name}_座位分配清單.csv`;
+      link.download = `${projectName}_${activeSession?.name}_${reportType === 'seat' ? '座位分配表' : '拍照動線表'}.csv`;
       link.click();
       URL.revokeObjectURL(url);
   };
 
   return createPortal(
     <>
-      {/* 【核心修復】專為此 Modal 寫的列印樣式：確保在列印時隱藏背後的畫布，只印出報表 */}
       <style type="text/css">
-        {`
-          @media print {
-            body * { visibility: hidden; }
-            #report-print-area, #report-print-area * { visibility: visible; }
-            #report-print-area {
-              position: absolute;
-              left: 0;
-              top: 0;
-              width: 100%;
-              padding: 0 !important;
-              margin: 0 !important;
-            }
-          }
-        `}
+        {`@media print { body * { visibility: hidden; } #report-print-area, #report-print-area * { visibility: visible; } #report-print-area { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; margin: 0 !important; } }`}
       </style>
 
       <div className="fixed inset-0 bg-slate-900/80 flex items-center justify-center z-[100] p-4 print:p-0 print:bg-white print:static">
-        <div id="report-print-area" className="bg-white w-[950px] max-h-[90vh] rounded-xl shadow-2xl flex flex-col print:shadow-none print:w-full print:max-h-none print:h-auto">
+        <div id="report-print-area" className="bg-white w-[1000px] max-h-[90vh] rounded-xl shadow-2xl flex flex-col print:shadow-none print:w-full print:max-h-none print:h-auto">
           
           <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl shrink-0 print:hidden">
-            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <Printer size={20} className="text-amber-500" /> 座位分配清單匯出
-            </h2>
+            <div className="flex bg-white rounded-lg border border-slate-200 p-1 shadow-sm">
+                <button onClick={() => setReportType('seat')} className={`flex items-center gap-2 px-4 py-1.5 rounded-md font-bold text-sm transition ${reportType === 'seat' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>
+                    <LayoutGrid size={16}/> 座位分配表
+                </button>
+                <button onClick={() => setReportType('photo')} className={`flex items-center gap-2 px-4 py-1.5 rounded-md font-bold text-sm transition ${reportType === 'photo' ? 'bg-fuchsia-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>
+                    <Camera size={16}/> 拍照動線表
+                </button>
+            </div>
+            
             <div className="flex gap-2">
-              <button 
-                onClick={handleExportCSV}
-                className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 text-sm font-bold rounded-lg hover:bg-emerald-700 shadow-sm transition"
-              >
-                 <Download size={16}/> 匯出 CSV
-              </button>
-              <button 
-                onClick={() => window.print()}
-                className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2 text-sm font-bold rounded-lg hover:bg-amber-600 shadow-sm transition"
-              >
-                 <Printer size={16}/> 列印 / 另存 PDF
-              </button>
+              <button onClick={handleExportCSV} className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 text-sm font-bold rounded-lg hover:bg-emerald-700 shadow-sm transition"><Download size={16}/> 匯出 CSV</button>
+              <button onClick={() => window.print()} className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2 text-sm font-bold rounded-lg hover:bg-amber-600 shadow-sm transition"><Printer size={16}/> 列印 / PDF</button>
               <button onClick={onClose} className="p-1.5 hover:bg-slate-200 rounded-full text-slate-500 transition"><X size={20}/></button>
             </div>
           </div>
@@ -131,61 +141,67 @@ export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
           <div className="p-8 overflow-y-auto custom-scrollbar flex-1 print:p-0 print:overflow-visible">
             <div className="text-center mb-6">
               <h1 className="text-2xl font-bold text-slate-900 mb-1">{projectName}</h1>
-              <h2 className="text-lg font-bold text-slate-600 mb-2">【 {activeSession?.name} 】座位安排表</h2>
+              <h2 className={`text-lg font-bold mb-2 ${reportType === 'photo' ? 'text-fuchsia-700' : 'text-blue-700'}`}>
+                  【 {activeSession?.name} 】{reportType === 'seat' ? '座位分配表' : '上台拍照動線表'}
+              </h2>
               <p className="text-xs text-slate-400">製表時間：{new Date().toLocaleString()}</p>
             </div>
 
             <table className="w-full border-collapse text-sm">
               <thead className="sticky top-0 bg-white print:static z-10">
-                <tr className="bg-slate-100 border-y-2 border-slate-300 print:bg-slate-100">
-                  <th className="py-2 px-3 text-left w-20 cursor-pointer group hover:bg-slate-200 transition" onClick={() => handleSort('seatLabel')}>
-                      座位 {renderSortIcon('seatLabel')}
-                  </th>
-                  {/* 【新增】序號欄位 */}
-                  <th className="py-2 px-3 text-left w-20 cursor-pointer group hover:bg-slate-200 transition" onClick={() => handleSort('serialNumber')}>
-                      序號 {renderSortIcon('serialNumber')}
-                  </th>
-                  <th className="py-2 px-3 text-left w-[20%] cursor-pointer group hover:bg-slate-200 transition" onClick={() => handleSort('personName')}>
-                      姓名 {renderSortIcon('personName')}
-                  </th>
-                  <th className="py-2 px-3 text-left w-1/4 cursor-pointer group hover:bg-slate-200 transition" onClick={() => handleSort('personTitle')}>
-                      職稱 {renderSortIcon('personTitle')}
-                  </th>
-                  <th className="py-2 px-3 text-left cursor-pointer group hover:bg-slate-200 transition" onClick={() => handleSort('personOrg')}>
-                      單位 {renderSortIcon('personOrg')}
-                  </th>
-                  <th className="py-2 px-3 text-left w-28 cursor-pointer group hover:bg-slate-200 transition" onClick={() => handleSort('category')}>
-                      類別 {renderSortIcon('category')}
-                  </th>
-                </tr>
+                {reportType === 'seat' ? (
+                   <tr className="bg-blue-50/50 border-y-2 border-blue-200 print:bg-slate-100 text-blue-900">
+                     <th className="py-2 px-3 text-left w-20 cursor-pointer group" onClick={() => handleSort('seatLabel')}>座位 {renderSortIcon('seatLabel')}</th>
+                     <th className="py-2 px-3 text-left w-20 cursor-pointer group" onClick={() => handleSort('serialNumber')}>序號 {renderSortIcon('serialNumber')}</th>
+                     <th className="py-2 px-3 text-left w-[20%] cursor-pointer group" onClick={() => handleSort('personName')}>姓名 {renderSortIcon('personName')}</th>
+                     <th className="py-2 px-3 text-left w-1/4 cursor-pointer group" onClick={() => handleSort('personTitle')}>職稱 {renderSortIcon('personTitle')}</th>
+                     <th className="py-2 px-3 text-left cursor-pointer group" onClick={() => handleSort('personOrg')}>單位 {renderSortIcon('personOrg')}</th>
+                     <th className="py-2 px-3 text-left w-28 cursor-pointer group" onClick={() => handleSort('category')}>類別 {renderSortIcon('category')}</th>
+                   </tr>
+                ) : (
+                   <tr className="bg-fuchsia-50/50 border-y-2 border-fuchsia-200 print:bg-slate-100 text-fuchsia-900">
+                     <th className="py-2 px-3 text-left w-24 cursor-pointer group" onClick={() => handleSort('batchName')}>拍照梯次 {renderSortIcon('batchName')}</th>
+                     <th className="py-2 px-3 text-left w-24 cursor-pointer group" onClick={() => handleSort('spotLabel')}>上台站位 {renderSortIcon('spotLabel')}</th>
+                     <th className="py-2 px-3 text-left w-20 cursor-pointer group" onClick={() => handleSort('seatLabel')}>原座位 {renderSortIcon('seatLabel')}</th>
+                     <th className="py-2 px-3 text-left w-16 cursor-pointer group" onClick={() => handleSort('serialNumber')}>序號 {renderSortIcon('serialNumber')}</th>
+                     <th className="py-2 px-3 text-left w-32 cursor-pointer group" onClick={() => handleSort('personName')}>姓名 {renderSortIcon('personName')}</th>
+                     <th className="py-2 px-3 text-left w-48 cursor-pointer group" onClick={() => handleSort('personTitle')}>職稱 {renderSortIcon('personTitle')}</th>
+                     <th className="py-2 px-3 text-left cursor-pointer group" onClick={() => handleSort('personOrg')}>單位 {renderSortIcon('personOrg')}</th>
+                   </tr>
+                )}
               </thead>
               <tbody>
-                {assignedSeats.map((item, idx) => (
+                {listData.map((item, idx) => (
                   <tr key={idx} className="border-b border-slate-200 hover:bg-slate-50 print:border-slate-300">
-                    <td className="py-2 px-3 font-mono font-bold text-blue-800">{item.seatLabel}</td>
-                    {/* 【新增】序號資料 */}
-                    <td className="py-2 px-3 font-mono text-slate-500">{item.serialNumber}</td>
-                    <td className="py-2 px-3 font-bold text-base tracking-wide">{item.personName}</td>
-                    <td className="py-2 px-3 text-slate-600">{item.personTitle}</td>
-                    <td className="py-2 px-3 text-slate-600">{item.personOrg}</td>
-                    <td className="py-2 px-3">
-                      <span className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] text-slate-500">
-                        {item.category}
-                      </span>
-                    </td>
+                    {reportType === 'seat' ? (
+                        <>
+                          <td className="py-2 px-3 font-mono font-bold text-blue-800">{item.seatLabel}</td>
+                          <td className="py-2 px-3 font-mono text-slate-500">{item.serialNumber}</td>
+                          <td className="py-2 px-3 font-bold text-base tracking-wide">{item.personName}</td>
+                          <td className="py-2 px-3 text-slate-600">{item.personTitle}</td>
+                          <td className="py-2 px-3 text-slate-600">{item.personOrg}</td>
+                          <td className="py-2 px-3"><span className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] text-slate-500">{item.category}</span></td>
+                        </>
+                    ) : (
+                        <>
+                          <td className="py-2 px-3 font-bold text-fuchsia-700">{item.batchName}</td>
+                          <td className="py-2 px-3 font-mono font-bold text-slate-800 bg-fuchsia-50/30">{item.spotLabel}</td>
+                          <td className="py-2 px-3 font-mono text-slate-500">{item.seatLabel}</td>
+                          <td className="py-2 px-3 font-mono text-slate-400">{item.serialNumber}</td>
+                          <td className="py-2 px-3 font-bold text-base tracking-wide">{item.personName}</td>
+                          <td className="py-2 px-3 text-slate-600">{item.personTitle}</td>
+                          <td className="py-2 px-3 text-slate-600">{item.personOrg}</td>
+                        </>
+                    )}
                   </tr>
                 ))}
-                {assignedSeats.length === 0 && (
+                {listData.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center text-slate-400">本場次目前尚無人員入座</td>
+                    <td colSpan={7} className="py-10 text-center text-slate-400">目前尚無相關資料</td>
                   </tr>
                 )}
               </tbody>
             </table>
-            
-            <div className="mt-8 pt-4 border-t border-slate-200 text-center text-[10px] text-slate-400 hidden print:block">
-               本報表由 Seat-System v4.0 自動產生
-            </div>
           </div>
         </div>
       </div>

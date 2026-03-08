@@ -14,7 +14,7 @@ const parseBoolean = (val: string) => {
 
 export const ExcelBatchModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const { updatePersonnelList } = usePersonnelStore();
-  const { sessions, personnel } = useProjectStore();
+  const { sessions, personnel } = useProjectStore(); 
   
   const [step, setStep] = useState<1 | 2>(1);
   const [pastedText, setPastedText] = useState('');
@@ -37,8 +37,8 @@ export const ExcelBatchModal: React.FC<Props> = ({ isOpen, onClose }) => {
         else if (h.includes('單位') || h.includes('組織')) initialMapping[i] = 'organization';
         else if (h.includes('類別') || h.includes('組別')) initialMapping[i] = 'category';
         else if (h.includes('權重') || h.includes('分數')) initialMapping[i] = 'rankScore';
-        else if (h.includes('序號') || h.toLowerCase().includes('sn')) initialMapping[i] = 'serialNumber'; // 【新增】自動抓取序號
-        else if (h.includes('備註') || h.includes('備註')) initialMapping[i] = 'remarks';               // 【新增】自動抓取備註
+        else if (h.includes('序號') || h.toLowerCase().includes('sn')) initialMapping[i] = 'serialNumber'; 
+        else if (h.includes('備註')) initialMapping[i] = 'remarks';               
         else {
             const sessionMatch = sessions.find(s => h.includes(s.name));
             if (sessionMatch) initialMapping[i] = `session_${sessionMatch.id}`;
@@ -61,7 +61,8 @@ export const ExcelBatchModal: React.FC<Props> = ({ isOpen, onClose }) => {
            id: `person-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
            externalId: generateUUID(),
            name: '', title: '', organization: '', category: '一般貴賓', rankScore: 50,
-           serialNumber: '', remarks: '', // 【新增】預設空值
+           serialNumber: '', remarks: '', 
+           photoData: {}, // 初始化空字典
            isSeated: false, attendingSessionIds: []
         };
 
@@ -73,9 +74,6 @@ export const ExcelBatchModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 const sessionId = mapKey.replace('session_', '');
                 if (parseBoolean(val)) personData.attendingSessionIds.push(sessionId);
             } 
-            // 【新增】寫入序號與備註
-            else if (mapKey === 'serialNumber') personData.serialNumber = val;
-            else if (mapKey === 'remarks') personData.remarks = val;
             else personData[mapKey] = val;
         });
 
@@ -87,10 +85,7 @@ export const ExcelBatchModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
     updatePersonnelList(newPeople);
     alert(`成功匯入 ${importCount} 筆名單！`);
-    
-    setPastedText('');
-    setStep(1);
-    onClose();
+    setPastedText(''); setStep(1); onClose();
   };
 
   return (
