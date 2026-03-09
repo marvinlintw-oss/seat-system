@@ -51,7 +51,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onEnter }) => {
           </div>
         </div>
         <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 mb-2">
-          Seat System <span className="text-blue-600">v4.0</span>
+          Seat System <span className="text-blue-600">v1.2</span>
         </h1>
         <p className="text-slate-500 font-medium">多場次雲端排位管理系統</p>
       </div>
