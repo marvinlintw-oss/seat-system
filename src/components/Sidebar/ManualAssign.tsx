@@ -25,7 +25,7 @@ export const ManualAssign: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-slate-100/50">
       <div className="p-2 border-b border-slate-200 bg-white shrink-0 flex justify-between items-center">
-          <span className="text-[11px] font-bold text-slate-500">
+          <span className="text-[10px] font-bold text-slate-500">
              {activeViewMode === 'photo' ? '待上台名單' : '待安排名單'} ({unassigned.length})
           </span>
       </div>
@@ -35,7 +35,6 @@ export const ManualAssign: React.FC = () => {
           const cat = categories.find(c => c.label === person.category);
           const color = cat ? cat.color : '#cbd5e1';
           
-          // 【核心新增】計算這個人在這場次的「其他梯次」是否已經有站位
           let participatedBatches: string[] = [];
           if (activeViewMode === 'photo' && activeSession?.photoBatches) {
               participatedBatches = activeSession.photoBatches
@@ -53,15 +52,19 @@ export const ManualAssign: React.FC = () => {
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-1.5 mb-0.5">
-                  <span className="font-bold text-sm text-slate-800 truncate">{person.name}</span>
-                  <span className="text-[12px] text-slate-500 font-mono truncate">{person.organization}</span>
+                  <span className="font-bold text-xs text-slate-800 truncate">{person.name}</span>
+                  <span className="text-[9px] text-slate-400 font-mono truncate">{person.organization}</span>
                 </div>
-                <div className="text-[12px] text-slate-500 truncate leading-tight">
-                  {person.title} 
-                  {person.remarks && <span className="text-amber-600 font-bold ml-1">📝 {person.remarks}</span>}
-                  {/* 【顯示提示】如果他已經在別拍，用橘黃色標籤提示 */}
+                {/* 【核心修正】加入 flex-wrap 讓過長的內容自動換行，保護梯次徽章 */}
+                <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                  <span className="text-[9px] text-slate-500">{person.title}</span>
+                  {person.remarks && (
+                      <span className="text-[9px] text-amber-600 font-bold max-w-full truncate" title={person.remarks}>
+                          📝 {person.remarks}
+                      </span>
+                  )}
                   {participatedBatches.length > 0 && (
-                      <span className="ml-1 inline-block bg-orange-100 text-orange-700 px-1 py-0.5 rounded font-bold">
+                      <span className="text-[9px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded font-bold whitespace-nowrap shadow-sm">
                           已排入 {participatedBatches.join(', ')} 拍
                       </span>
                   )}

@@ -19,7 +19,9 @@ export const useCanvasControls = ({
   containerRef, placingBatch, setMouseGridPos, setSelectionRect, selectionRect, clearContextMenu, GRID_SIZE
 }: CanvasControlsOptions) => {
   const { isEditMode, setStageScale, setStagePosition, addToSelection, clearSelection } = useVenueStore();
-  const { sessions, activeSessionId } = useProjectStore();
+  
+  // 【核心修復】引入 activeViewMode 與 activePhotoBatchId 來判斷目前模式
+  const { sessions, activeSessionId, activeViewMode, activePhotoBatchId } = useProjectStore();
 
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
@@ -27,7 +29,15 @@ export const useCanvasControls = ({
   const selectStartPos = useRef({ x: 0, y: 0 });
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
-  const seats = activeSession?.venue.seats || [];
+  
+  // 【核心修復】智能路由：依據模式抓取對應的畫布陣列，讓框選能對應到正確的點位
+  let seats: Seat[] = [];
+  if (activeViewMode === 'photo') {
+      const batch = activeSession?.photoBatches?.find(b => b.id === activePhotoBatchId);
+      seats = batch ? batch.spots : [];
+  } else {
+      seats = activeSession?.venue.seats || [];
+  }
 
   const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -114,6 +124,7 @@ export const useCanvasControls = ({
     if (containerRef.current) containerRef.current.style.cursor = isEditMode ? 'crosshair' : 'default';
 
     if (isSelecting.current && selectionRect) {
+       // 【核心發揮作用】這裡的 seats 陣列已經根據模式切換過了，所以框選計算會完全正確！
        const selected = seats.filter((s: Seat) => 
           s.isVisible !== false && s.type !== 'shape' &&
           s.x >= selectionRect.x &&

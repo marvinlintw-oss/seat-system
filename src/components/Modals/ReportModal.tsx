@@ -30,7 +30,6 @@ export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
     return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-blue-600 inline ml-1"/> : <ArrowDown size={14} className="text-blue-600 inline ml-1"/>;
   };
 
-  // 【核心修改】動態產生報表資料
   let listData: any[] = [];
 
   if (reportType === 'seat') {
@@ -44,7 +43,6 @@ export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
           }
       });
   } else {
-      // 拍照動線表：遍歷所有梯次
       photoBatches.forEach(batch => {
           batch.spots.filter(s => s.assignedPersonId).forEach(spot => {
               const p = personnel.find(person => person.id === spot.assignedPersonId);
@@ -61,18 +59,17 @@ export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
       });
   }
 
+  // 【核心修正】導入自然數排序 (Natural Sort) 引擎
   listData.sort((a, b) => {
+      const collator = new Intl.Collator('zh-TW', { numeric: true, sensitivity: 'base' });
+
       if (!sortConfig) {
           if (reportType === 'seat') {
-              const numA = parseInt(a.seatLabel); const numB = parseInt(b.seatLabel);
-              if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-              return a.seatLabel.localeCompare(b.seatLabel);
+              return collator.compare(a.seatLabel, b.seatLabel);
           } else {
-              const batchDiff = a.batchName.localeCompare(b.batchName);
+              const batchDiff = collator.compare(a.batchName, b.batchName);
               if (batchDiff !== 0) return batchDiff;
-              const spotA = parseInt(a.spotLabel); const spotB = parseInt(b.spotLabel);
-              if (!isNaN(spotA) && !isNaN(spotB)) return spotA - spotB;
-              return a.spotLabel.localeCompare(b.spotLabel);
+              return collator.compare(a.spotLabel, b.spotLabel);
           }
       }
       
@@ -80,11 +77,8 @@ export const ReportModal: React.FC<Props> = ({ isOpen, onClose }) => {
       const valA = a[key as keyof typeof a] || ''; 
       const valB = b[key as keyof typeof b] || '';
       
-      if (key === 'seatLabel' || key === 'spotLabel' || key === 'serialNumber') {
-          const numA = parseInt(valA as string); const numB = parseInt(valB as string);
-          if (!isNaN(numA) && !isNaN(numB)) return direction === 'asc' ? numA - numB : numB - numA;
-      }
-      return direction === 'asc' ? (valA as string).localeCompare(valB as string, 'zh-TW') : (valB as string).localeCompare(valA as string, 'zh-TW');
+      const comparison = collator.compare(valA as string, valB as string);
+      return direction === 'asc' ? comparison : -comparison;
   });
 
   const handleExportCSV = () => {
