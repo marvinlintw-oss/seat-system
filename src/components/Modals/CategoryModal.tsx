@@ -1,147 +1,154 @@
 // src/components/Modals/CategoryModal.tsx
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useProjectStore } from '../../store/useProjectStore';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { X, Plus, Trash2, Info } from 'lucide-react';
+import type { Category } from '../../types';
 
-interface CategoryModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-}
+interface Props { isOpen: boolean; onClose: () => void; }
 
-export const CategoryModal: React.FC<CategoryModalProps> = ({ isOpen, onClose }) => {
-  const { categories, updateCategory, addCategory, removeCategory, personnel, setPersonnel } = useProjectStore();
+export const CategoryModal: React.FC<Props> = ({ isOpen, onClose }) => {
+  const { categories, setCategories, personnel, setPersonnel, sessions } = useProjectStore();
+  const [localCategories, setLocalCategories] = useState<Category[]>([]);
+
+  // 每次打開視窗時，深拷貝一份目前的類別資料來編輯，避免直接污染大腦
+  useEffect(() => {
+    if (isOpen) {
+        setLocalCategories(JSON.parse(JSON.stringify(categories)));
+    }
+  }, [isOpen, categories]);
 
   if (!isOpen) return null;
 
-  // 【核心邏輯 1】連動更新：當改了類別名稱，必須把已經套用該類別的人員和座位一起改掉！
-  const handleLabelChange = (id: string, oldLabel: string, newLabel: string) => {
-    const trimmed = newLabel.trim();
-    if (!trimmed || trimmed === oldLabel) return;
-    
-    // 1. 更新類別本身
-    updateCategory(id, { label: trimmed });
-    
-    // 2. 更新所有人員身上的類別
-    const updatedPersonnel = personnel.map(p => 
-       p.category === oldLabel ? { ...p, category: trimmed } : p
-    );
-    setPersonnel(updatedPersonnel);
-    
-    // 3. 更新所有場次的座位區塊屬性 (直接對大水庫發號施令)
-    const state = useProjectStore.getState();
-    useProjectStore.setState({
-        sessions: state.sessions.map(s => ({
-            ...s,
-            venue: {
-                ...s.venue,
-                seats: s.venue.seats.map(seat => 
-                    seat.zoneCategory === oldLabel ? { ...seat, zoneCategory: trimmed } : seat
-                )
-            }
-        }))
-    });
-  };
-
-  // 【核心邏輯 2】顏色連動：改區塊顏色時，名牌顏色自動跟上 (除非後來手動改名牌顏色)
-  const handleColorChange = (id: string, newColor: string, isZone: boolean) => {
-      if (isZone) {
-          // 改區塊顏色，順便把預設的名牌顏色也設為一樣
-          updateCategory(id, { color: newColor, personColor: newColor });
-      } else {
-          // 獨立改名牌顏色
-          updateCategory(id, { personColor: newColor });
-      }
-  };
-
   const handleAdd = () => {
-      const newId = `cat-${Date.now()}`;
-      addCategory({ id: newId, label: '新類別', color: '#cbd5e1', personColor: '#cbd5e1', weight: 0 });
+    const newCat: Category = {
+        id: `cat-${Date.now()}`,
+        label: `新類別 ${localCategories.length + 1}`,
+        weight: 50,
+        color: '#cbd5e1',
+        personColor: '#f8fafc'
+    };
+    setLocalCategories([...localCategories, newCat]);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-2xl w-[700px] max-h-[80vh] flex flex-col">
-        <div className="flex justify-between items-center p-4 border-b border-slate-200">
-          <h2 className="text-lg font-bold text-slate-800">類別與顏色設定</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-red-500"><X size={20}/></button>
-        </div>
+  const handleUpdate = (id: string, field: keyof Category, value: any) => {
+    setLocalCategories(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
+  };
+
+  const handleRemove = (id: string) => {
+    if (window.confirm('確定刪除此類別嗎？(已套用此類別的人員將會變成無類別)')) {
+        setLocalCategories(prev => prev.filter(c => c.id !== id));
+    }
+  };
+
+  const handleSave = () => {
+    const updatedPersonnel = [...personnel];
+    const updatedSessions = JSON.parse(JSON.stringify(sessions));
+
+    // 【核心修復】全域名稱連動引擎
+    localCategories.forEach(localCat => {
+        const oldCat = categories.find(c => c.id === localCat.id);
+        const newLabel = localCat.label.trim();
         
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-           {/* 標題列 */}
-           <div className="flex gap-3 px-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
-              <div className="flex-1">類別名稱 (可點擊修改)</div>
-              <div className="w-20 text-center">優先權重</div>
-              <div className="w-24 text-center">區塊顏色</div>
-              <div className="w-24 text-center">名牌顏色</div>
-              <div className="w-10"></div>
-           </div>
+        // 如果類別改名了，同步更新人員名單與所有畫布區塊
+        if (oldCat && oldCat.label !== newLabel && newLabel !== '') {
+            // 1. 同步更新人員名單
+            updatedPersonnel.forEach(p => {
+                if (p.category === oldCat.label) p.category = newLabel;
+            });
+            // 2. 同步更新所有場次的座位與拍照站位
+            updatedSessions.forEach((s: any) => {
+                s.venue.seats.forEach((seat: any) => {
+                    if (seat.zoneCategory === oldCat.label) seat.zoneCategory = newLabel;
+                });
+                s.photoBatches?.forEach((batch: any) => {
+                    batch.spots.forEach((spot: any) => {
+                        if (spot.zoneCategory === oldCat.label) spot.zoneCategory = newLabel;
+                    });
+                });
+            });
+        }
+    });
 
-           {/* 類別列表 */}
-           {categories.sort((a,b) => b.weight - a.weight).map(cat => (
-              <div key={cat.id} className="flex gap-3 items-center bg-slate-50 p-2 rounded border border-slate-200 hover:border-blue-300 transition focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
-                  {/* 名稱編輯 */}
+    // 過濾掉空白標籤，避免產生無效類別
+    const finalCategories = localCategories
+        .filter(c => c.label.trim() !== '')
+        .map(c => ({ ...c, label: c.label.trim() }));
+
+    // 將更新後的人員、場地、與最新類別寫回大腦
+    setPersonnel(updatedPersonnel);
+    useProjectStore.setState({ sessions: updatedSessions });
+    setCategories(finalCategories);
+    
+    onClose();
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[85vh]">
+         
+         <div className="p-4 border-b flex justify-between items-center shrink-0 bg-slate-50 rounded-t-xl">
+           <h2 className="font-bold text-lg text-slate-800">類別與顏色設定</h2>
+           <button onClick={onClose} className="p-1 hover:bg-slate-200 rounded-full text-slate-500 transition"><X size={20}/></button>
+         </div>
+         
+         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-slate-50/50">
+           {localCategories.map((cat) => (
+             <div key={cat.id} className="flex items-center gap-3 bg-white p-3 rounded-lg border border-slate-200 shadow-sm hover:border-blue-300 hover:shadow-md transition">
+                <div className="flex-1">
                   <input 
-                     type="text" 
-                     defaultValue={cat.label} 
-                     onBlur={(e) => handleLabelChange(cat.id, cat.label, e.target.value)}
-                     onKeyDown={(e) => { 
-                         if(e.nativeEvent.isComposing) return; // 防範中文選字衝突
-                         if(e.key === 'Enter') e.currentTarget.blur(); 
-                     }}
-                     className="flex-1 bg-transparent border-0 px-2 py-1.5 text-sm font-bold text-slate-700 outline-none"
+                      type="text" 
+                      value={cat.label} 
+                      onChange={e => handleUpdate(cat.id, 'label', e.target.value)} 
+                      className="w-full outline-none font-bold text-slate-700 bg-transparent px-1 py-1 focus:ring-2 focus:ring-blue-100 rounded" 
+                      placeholder="輸入類別名稱"
                   />
-                  
-                  {/* 權重編輯 */}
+                </div>
+                <div className="w-20 relative">
+                  <span className="absolute -top-3 left-1 text-[9px] text-slate-400 bg-white px-1">權重</span>
                   <input 
-                     type="number" 
-                     value={cat.weight} 
-                     onChange={(e) => updateCategory(cat.id, { weight: Number(e.target.value) })}
-                     className="w-20 bg-white border border-slate-300 rounded px-2 py-1 text-sm text-center outline-none focus:border-blue-500"
+                      type="number" 
+                      value={cat.weight} 
+                      onChange={e => handleUpdate(cat.id, 'weight', Number(e.target.value))} 
+                      className="w-full border border-slate-200 rounded px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400" 
+                      title="自動排位權重 (數字越大越前排)"
                   />
-                  
-                  {/* 區塊顏色 */}
-                  <div className="w-24 flex justify-center">
-                      <input 
-                         type="color" 
-                         value={cat.color} 
-                         onChange={(e) => handleColorChange(cat.id, e.target.value, true)}
-                         className="w-8 h-8 rounded cursor-pointer border-0 p-0"
-                         title="區塊底色"
-                      />
+                </div>
+                
+                {/* 區塊顏色 */}
+                <div className="flex flex-col items-center gap-1" title="畫布區塊的底色">
+                  <span className="text-[9px] text-slate-400">區塊色</span>
+                  <div className="w-10 h-8 rounded border border-slate-200 overflow-hidden relative shadow-inner cursor-pointer">
+                    <input type="color" value={cat.color} onChange={e => handleUpdate(cat.id, 'color', e.target.value)} className="absolute -top-2 -left-2 w-16 h-16 cursor-pointer"/>
                   </div>
+                </div>
 
-                  {/* 名牌顏色 (預設等同區塊顏色) */}
-                  <div className="w-24 flex justify-center">
-                      <input 
-                         type="color" 
-                         value={cat.personColor || cat.color} 
-                         onChange={(e) => handleColorChange(cat.id, e.target.value, false)}
-                         className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm"
-                         title="座位上的名牌顏色"
-                      />
+                {/* 名牌顏色 */}
+                <div className="flex flex-col items-center gap-1" title="人員名牌的底色">
+                  <span className="text-[9px] text-slate-400">名牌色</span>
+                  <div className="w-10 h-8 rounded border border-slate-200 overflow-hidden relative shadow-inner cursor-pointer">
+                    <input type="color" value={cat.personColor || cat.color} onChange={e => handleUpdate(cat.id, 'personColor', e.target.value)} className="absolute -top-2 -left-2 w-16 h-16 cursor-pointer"/>
                   </div>
-
-                  {/* 刪除按鈕 */}
-                  <div className="w-10 flex justify-center">
-                      <button onClick={() => { if(window.confirm('確定刪除此類別？')) removeCategory(cat.id); }} className="text-slate-400 hover:text-red-500 p-1 rounded hover:bg-red-50 transition">
-                          <Trash2 size={16}/>
-                      </button>
-                  </div>
-              </div>
+                </div>
+                
+                <button onClick={() => handleRemove(cat.id)} className="p-2 mt-4 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition"><Trash2 size={16}/></button>
+             </div>
            ))}
-           
-           <button onClick={handleAdd} className="w-full mt-4 py-3 border-2 border-dashed border-slate-300 text-slate-500 font-bold rounded-lg hover:bg-slate-50 hover:border-blue-400 hover:text-blue-500 transition flex items-center justify-center gap-2">
-              <Plus size={18}/> 新增類別
+           <button onClick={handleAdd} className="w-full py-4 border-2 border-dashed border-slate-300 text-slate-500 rounded-lg font-bold hover:bg-slate-100 hover:border-slate-400 transition flex items-center justify-center gap-2 mt-2">
+             <Plus size={18}/> 新增類別
            </button>
-        </div>
-        
-        <div className="p-4 border-t border-slate-200 bg-blue-50 rounded-b-xl flex justify-between items-center text-xs text-blue-700">
-           <span>💡 提示：點擊名稱即可修改。修改名稱會自動同步更新畫布與人員名單。</span>
-           <button onClick={onClose} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-6 rounded shadow transition">
-              完成
+         </div>
+
+         <div className="p-4 border-t border-slate-200 bg-white flex justify-between items-center shrink-0 rounded-b-xl">
+           <div className="text-xs text-blue-700 flex items-center gap-1.5 font-bold bg-blue-50 px-3 py-2 rounded-lg border border-blue-100">
+             <Info size={14} className="text-blue-500"/> 提示：點擊名稱即可修改。修改名稱會自動同步更新畫布與人員名單。
+           </div>
+           <button onClick={handleSave} className="bg-blue-600 text-white px-8 py-2.5 rounded-lg font-bold hover:bg-blue-700 shadow-sm transition flex items-center gap-2">
+               完成儲存
            </button>
-        </div>
+         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
