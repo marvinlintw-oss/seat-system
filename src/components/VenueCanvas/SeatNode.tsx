@@ -104,11 +104,37 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
           
           {occupant ? (
             <Group listening={false}>
-              {/* 【修正重點】全部改為 wrap="char" */}
-              <Text text={occupant.organization} x={4} y={35} width={SEAT_WIDTH-8} align="center" fontSize={11} fill="#1e293b" fontStyle="bold" wrap="char" height={28} ellipsis={true} />
-              <Text text={occupant.name} x={2} y={65} width={SEAT_WIDTH-4} align="center" fontSize={18} fill="#0f172a" fontStyle="bold" wrap="char" height={44} ellipsis={true} />
-              <Text text={occupant.title} x={4} y={105} width={SEAT_WIDTH-8} align="center" fontSize={12} fill="#334155" wrap="char" height={hasPhoto ? 20 : 32} ellipsis={true} />
-              {occupant.remarks && <Text text="📝" x={SEAT_WIDTH - 20} y={30} fontSize={12} />}
+              
+              <Text 
+                 text={occupant.organization} 
+                 x={4} y={26} 
+                 width={SEAT_WIDTH-8} height={32} 
+                 align="center" verticalAlign="middle" 
+                 fontSize={12} fill="#1e293b" fontStyle="bold" 
+                 wrap="char" lineHeight={1.2} ellipsis={true} 
+              />
+              
+              {/* 🟢 姓名加大一級 (20 -> 22)，並微調框框高度確保兩行能塞下 */}
+              <Text 
+                 text={occupant.name} 
+                 x={2} y={58} 
+                 width={SEAT_WIDTH-4} height={56} 
+                 align="center" verticalAlign="middle" 
+                 fontSize={25} fill="#0f172a" fontStyle="bold" 
+                 wrap="char" lineHeight={1.1} ellipsis={true} 
+              />
+              
+              {/* 🟢 職稱加大一級 (12 -> 14)，下移並支援兩行 wrap="char" */}
+              <Text 
+                 text={occupant.title} 
+                 x={4} y={112} 
+                 width={SEAT_WIDTH-8} height={hasPhoto ? 16 : 30} 
+                 align="center" verticalAlign="middle"
+                 fontSize={16} fill="#334155" wrap="char" 
+                 lineHeight={1.1} ellipsis={true} 
+              />
+              
+              {occupant.remarks && <Text text="📝" x={SEAT_WIDTH - 20} y={30} fontSize={12} name="hide-on-export" />}
             </Group>
           ) : (
             <>
@@ -135,7 +161,7 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
           )}
 
           {!isEditMode && occupant && (
-            <Group x={80} y={20} onClick={(e) => { e.cancelBubble=true; onUnassign(seat.id); }}>
+            <Group x={80} y={20} onClick={(e) => { e.cancelBubble=true; onUnassign(seat.id); }} name="hide-on-export">
               <Circle radius={8} fill="#ef4444" />
               <Text text="×" x={-3} y={-4} fontSize={10} fill="white" fontStyle="bold" listening={false}/>
             </Group>
