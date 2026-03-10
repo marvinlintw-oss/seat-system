@@ -19,8 +19,16 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const log = (msg: string) => setSyncLog(prev => [...prev, msg]);
 
-  // 🟢 將同步拆分為 Pull (下載) 與 Push (上傳) 兩個明確的方向
   const handleSyncProcess = async (direction: 'pull' | 'push') => {
+    // 🟢 核心修復：加入防呆確認對話框
+    if (direction === 'pull') {
+        const confirmMsg = '⚠️ 警告：確定要「從表單匯入」嗎？\n\n這將會以 Google 表單的資料為準，【覆寫】系統內現有的姓名、職稱、單位與備註！\n(如果您剛剛在系統內有修改名單，將會被蓋掉)';
+        if (!window.confirm(confirmMsg)) return;
+    } else {
+        const confirmMsg = '⚠️ 警告：確定要「匯出到表單」嗎？\n\n這將會以系統目前的狀態為準，【覆寫】Google 表單上的排位紀錄與最新名單！';
+        if (!window.confirm(confirmMsg)) return;
+    }
+
     try {
       setIsSyncing(true);
       setSyncLog([]);
@@ -35,7 +43,7 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
       }
 
       if (direction === 'pull') {
-          log(`📥 正在從試算表拉取資料 (Pull)...`);
+          log(`📥 正在從試算表匯入資料...`);
           const { values: rawData, sheetName } = await fetchSpreadsheetData(targetId, 'A:Z');
           
           if (!rawData || rawData.length === 0) {
@@ -107,12 +115,11 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
           }
           
           updatePersonnelList(newPersonnelList);
-          log(`✅ Pull 完成：從「${sheetName}」新增 ${added} 筆，覆寫 ${updated} 筆本地名單。`);
+          log(`✅ 匯入完成：從「${sheetName}」新增 ${added} 筆，更新 ${updated} 筆本地名單。`);
       }
 
       if (direction === 'push') {
-          log(`📤 準備將系統資料回推至試算表 (Push)...`);
-          // 為了取得正確的分頁名稱，還是先戳一次 API
+          log(`📤 準備將系統資料匯出至試算表...`);
           const { sheetName } = await fetchSpreadsheetData(targetId, 'A1:B1');
           
           const pushHeaders = ['系統ID (externalId)', '序號', '姓名', '職稱', '單位', '類別', '權重', '備註'];
@@ -140,7 +147,7 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
           });
 
           await updateSpreadsheetData(targetId, `${sheetName}!A1`, pushData);
-          log(`✅ Push 完成：已將系統內最新名單與座位排位結果回推至「${sheetName}」！`);
+          log(`✅ 匯出完成：已將系統內最新名單與座位排位結果寫回「${sheetName}」！`);
       }
 
     } catch (error: any) {
@@ -166,8 +173,8 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <div>
                   <p className="font-bold mb-1">為避免資料覆蓋，請明確選擇同步方向：</p>
                   <ul className="list-disc pl-4 space-y-1 text-blue-700">
-                      <li><strong>⬇️ 拉取 (Pull)：</strong>以 Google Sheet 為準，<strong>覆寫</strong>系統內的姓名、單位等基本資料。</li>
-                      <li><strong>⬆️ 回推 (Push)：</strong>以 系統 為準，將最新排位結果與修改的資料<strong>覆寫</strong>回 Google Sheet。</li>
+                      <li><strong>📥 從表單匯入：</strong>以 Google 表單 為準，<strong>覆寫</strong>系統內的姓名、單位等基本資料。</li>
+                      <li><strong>📤 匯出到表單：</strong>以 系統 為準，將最新排位結果與修改的資料<strong>覆寫</strong>回 Google 表單。</li>
                   </ul>
               </div>
            </div>
@@ -182,7 +189,6 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
            </div>
         </div>
 
-        {/* 🟢 拆分成兩個明確的按鈕，避免按錯 */}
         <div className="p-4 border-t border-slate-200 flex justify-end gap-3 bg-slate-50 rounded-b-xl">
             <button 
                 onClick={() => handleSyncProcess('pull')} 
@@ -190,7 +196,7 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 className="flex-1 py-3 font-bold bg-white border-2 border-blue-200 text-blue-600 hover:bg-blue-50 hover:border-blue-300 rounded-lg transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
             >
                {isSyncing ? <RefreshCw className="animate-spin" size={18}/> : <DownloadCloud size={18}/>}
-               1. 從試算表 拉取 更新
+                從表單匯入 (覆寫系統📥)
             </button>
             <button 
                 onClick={() => handleSyncProcess('push')} 
@@ -198,7 +204,7 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 className="flex-1 py-3 font-bold bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
             >
                {isSyncing ? <RefreshCw className="animate-spin" size={18}/> : <UploadCloud size={18}/>}
-               2. 將結果 回推 試算表
+                匯出到表單 (覆寫表單📤)
             </button>
         </div>
       </div>
