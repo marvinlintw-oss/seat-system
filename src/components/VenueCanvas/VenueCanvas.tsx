@@ -334,7 +334,6 @@ export const VenueCanvas: React.FC<VenueCanvasProps> = ({ forcedViewMode, isRead
   }, [isEditMode, isReadOnly, seats, selectedSeatIds, moveSeatsBatch, updateSeatPosition, updateSeatAssignment, syncSeatingStatus, saveHistory, localScale]);
 
   const handleSeatClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>, seat: Seat) => {
-      // 在下方的座位區(唯讀)點擊某個人，把它「抓」起來
       if (isReadOnly) {
           if (seat.assignedPersonId) {
               e.cancelBubble = true;
@@ -344,17 +343,14 @@ export const VenueCanvas: React.FC<VenueCanvasProps> = ({ forcedViewMode, isRead
           return;
       }
 
-      // 🟢 核心修復：在上方的拍照區，把「抓著的人」點擊放入空位
       if (!isReadOnly && !isEditMode && currentViewMode === 'photo') {
           const state = useProjectStore.getState();
-          // 防呆：確認這個位子是不是被死掉的幽靈 ID 佔據
           const isOccupied = seat.assignedPersonId && state.personnel.some(p => p.id === seat.assignedPersonId);
           
           if (selectedPersonForAssign && !isOccupied && seat.type !== 'shape') {
               e.cancelBubble = true;
               saveHistory();
 
-              // 🟢 進階優化：如果長官已經在這一拍的別的座位上，先把它拔掉 (實現無縫移動)
               const activeSession = state.sessions.find(s => s.id === activeSessionId);
               if (activeSession) {
                   const batch = activeSession.photoBatches?.find(b => b.id === activePhotoBatchId);
@@ -507,18 +503,45 @@ export const VenueCanvas: React.FC<VenueCanvasProps> = ({ forcedViewMode, isRead
         </>
       )}
 
+      {/* 🟢 豪華升級版的操作指南 */}
       {showHelp && (
         <div className="absolute top-16 right-4 bg-white p-5 rounded-xl shadow-2xl w-80 md:w-96 z-50 border border-slate-200 text-sm max-h-[80vh] overflow-y-auto custom-scrollbar">
           <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
               <h2 className="font-bold text-slate-800 text-base">操作快捷鍵指南 (v4.0)</h2>
               <button onClick={() => setShowHelp(false)} className="p-1 hover:bg-slate-100 rounded-full text-slate-500 transition"><X size={18}/></button>
           </div>
-          <div className="space-y-4 text-slate-600">
+          <div className="space-y-5 text-slate-600">
             <div>
                 <strong className="text-slate-800 flex items-center gap-1 mb-1">🔍 視角控制</strong>
                 <ul className="list-disc pl-5 space-y-1.5 text-xs">
                     <li><strong>平移畫布：</strong>在空白處按住「左鍵」拖曳</li>
-                    <li><strong>縮放畫布：</strong>滑鼠滾輪，或使用下方 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 rounded font-mono">+</kbd></li>
+                    <li><strong>縮放畫布：</strong>滑鼠滾輪，或使用下方 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 rounded font-mono text-slate-500">+</kbd> <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 rounded font-mono text-slate-500">-</kbd></li>
+                </ul>
+            </div>
+            <div>
+                <strong className="text-slate-800 flex items-center gap-1 mb-1">🖱️ 排位與動線操作</strong>
+                <ul className="list-disc pl-5 space-y-1.5 text-xs">
+                    <li><strong>一般排位：</strong>從左側名單拖曳人員至座位上。</li>
+                    <li><strong>上下聯動排位 (拍照模式)：</strong>在下方座位區「點擊」長官抓取，再到上方拍照區「點擊」空位入座。</li>
+                    <li><strong>取消入座：</strong>滑鼠移至已入座的卡片，點擊右上角紅色 <span className="text-red-500 font-bold">×</span>。</li>
+                </ul>
+            </div>
+            <div>
+                <strong className="text-slate-800 flex items-center gap-1 mb-1">⌨️ 快捷鍵 (需開啟場地編輯)</strong>
+                <ul className="list-disc pl-5 space-y-1.5 text-xs">
+                    <li><strong>多選座位：</strong>按住 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Shift</kbd> 點擊座位，或在空白處按住 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Shift</kbd> + 滑鼠拖曳框選。</li>
+                    <li><strong>對齊格線：</strong>拖曳座位時按住 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Shift</kbd>。</li>
+                    <li><strong>複製/貼上：</strong><kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Ctrl</kbd> + <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">C</kbd> / <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">V</kbd></li>
+                    <li><strong>復原動作：</strong><kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Ctrl</kbd> + <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Z</kbd></li>
+                    <li><strong>刪除選取：</strong><kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Delete</kbd></li>
+                    <li><strong>取消操作：</strong><kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Esc</kbd> (包含取消選取、放下抓取的人員、取消矩陣產生)</li>
+                </ul>
+            </div>
+            <div>
+                <strong className="text-slate-800 flex items-center gap-1 mb-1">✨ 進階編輯技巧</strong>
+                <ul className="list-disc pl-5 space-y-1.5 text-xs">
+                    <li><strong>快速新增單一座位：</strong>按住 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1 rounded font-mono text-slate-500">Ctrl</kbd> 點擊畫布空白處。</li>
+                    <li><strong>批次設定屬性：</strong>選取多個座位後，點擊「滑鼠右鍵」開啟批次設定選單。</li>
                 </ul>
             </div>
           </div>

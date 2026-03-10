@@ -3,12 +3,13 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { usePersonnelStore } from '../../store/usePersonnelStore';
 import { useProjectStore } from '../../store/useProjectStore';
-import { X, Save, Trash2, Plus, Table, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Save, Trash2, Plus, Table, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare } from 'lucide-react';
 import type { Person } from '../../types';
 
 interface Props { isOpen: boolean; onClose: () => void; }
 
-type SortConfig = { key: keyof Person | 'categoryWeight'; direction: 'asc' | 'desc'; } | null;
+// 🟢 把型別放寬，讓它可以接收場次的動態 ID (例如 'session_xxx')
+type SortConfig = { key: string; direction: 'asc' | 'desc'; } | null;
 
 export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const { personnel, categories, sessions } = useProjectStore();
@@ -16,6 +17,9 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
   
   const [localList, setLocalList] = useState<Person[]>([]);
   const [sortConfig, setSortConfig] = useState<SortConfig>(null);
+  
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const allSessionIds = sessions.map(s => s.id);
 
   useEffect(() => {
     if (isOpen) {
@@ -27,7 +31,9 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
         });
         setLocalList(JSON.parse(JSON.stringify(sortedList)));
         setSortConfig(null);
+        setSelectedRowIds([]); 
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, personnel, categories]);
 
   if (!isOpen) return null;
@@ -43,9 +49,26 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
     } : p));
   };
 
+  const handleBulkCategoryChange = (newCategory: string) => {
+    if (!newCategory) return;
+    const preset = categories.find(c => c.label === newCategory);
+    setLocalList(prev => prev.map(p => 
+      selectedRowIds.includes(p.id) 
+        ? { ...p, category: newCategory, rankScore: preset ? preset.weight : p.rankScore }
+        : p
+    ));
+  };
+
+  const handleBulkDelete = () => {
+    if (window.confirm(`確定要刪除選取的 ${selectedRowIds.length} 筆資料嗎？`)) {
+      setLocalList(prev => prev.filter(p => !selectedRowIds.includes(p.id)));
+      setSelectedRowIds([]);
+    }
+  };
+
   const handleToggleSessionForAll = (sessionId: string, isChecked: boolean) => {
     setLocalList(prev => prev.map(p => {
-      let currentIds = p.attendingSessionIds ? [...p.attendingSessionIds] : sessions.map(ss => ss.id);
+      let currentIds = p.attendingSessionIds ? [...p.attendingSessionIds] : [...allSessionIds];
       if (isChecked) { if (!currentIds.includes(sessionId)) currentIds.push(sessionId); } 
       else { currentIds = currentIds.filter(id => id !== sessionId); }
       return { ...p, attendingSessionIds: currentIds };
@@ -62,12 +85,13 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
       externalId: generateUUID(),
       serialNumber: '', remarks: '', name: '', title: '', organization: '',
       category: defaultCat?.label || '一般貴賓', rankScore: defaultCat?.weight || 50,
-      isSeated: false, attendingSessionIds: sessions.map(s => s.id)
+      isSeated: false, attendingSessionIds: [...allSessionIds]
     };
     setLocalList(prev => [newPerson, ...prev]); 
   };
 
-  const handleSort = (key: keyof Person | 'categoryWeight') => {
+  // 🟢 升級排序引擎：支援場次 Checkbox 排序
+  const handleSort = (key: string) => {
     let direction: 'asc' | 'desc' = 'asc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
     setSortConfig({ key, direction });
@@ -75,12 +99,29 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setLocalList(prevList => {
       const newList = [...prevList];
       newList.sort((a, b) => {
-        let valA: any = key === 'categoryWeight' ? (categories.find(c => c.label === a.category)?.weight || 0) : a[key as keyof Person];
-        let valB: any = key === 'categoryWeight' ? (categories.find(c => c.label === b.category)?.weight || 0) : b[key as keyof Person];
+        let valA: any;
+        let valB: any;
 
-        if (!valA) valA = ''; if (!valB) valB = '';
+        // 判斷是否為「場次排序」
+        if (key.startsWith('session_')) {
+            const sessionId = key.replace('session_', '');
+            const aIds = a.attendingSessionIds || allSessionIds;
+            const bIds = b.attendingSessionIds || allSessionIds;
+            // 把有勾選視為 1，沒勾選視為 0
+            valA = aIds.includes(sessionId) ? 1 : 0;
+            valB = bIds.includes(sessionId) ? 1 : 0;
+        } else if (key === 'categoryWeight') {
+            valA = categories.find(c => c.label === a.category)?.weight || 0;
+            valB = categories.find(c => c.label === b.category)?.weight || 0;
+        } else {
+            valA = a[key as keyof Person];
+            valB = b[key as keyof Person];
+        }
+
+        if (valA === undefined || valA === null) valA = ''; 
+        if (valB === undefined || valB === null) valB = '';
+
         if (typeof valA === 'string' && typeof valB === 'string') {
-          // 🟢 核心修復：加入 { numeric: true } 啟用自然排序引擎！
           return direction === 'asc' 
              ? valA.localeCompare(valB, 'zh-TW', { numeric: true }) 
              : valB.localeCompare(valA, 'zh-TW', { numeric: true });
@@ -99,7 +140,7 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
     return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-blue-600 inline ml-1"/> : <ArrowDown size={14} className="text-blue-600 inline ml-1"/>;
   };
 
-  const allSessionIds = sessions.map(s => s.id);
+  const isAllSelected = localList.length > 0 && selectedRowIds.length === localList.length;
 
   return createPortal(
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -107,11 +148,31 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
         
         <div className="p-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl shrink-0">
           <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
-             <Table size={20} className="text-green-600"/> 總名單編輯 (矩陣編輯與排序模式)
+             <Table size={20} className="text-green-600"/> 總名單編輯
           </h2>
-          <div className="flex gap-3">
+          
+          <div className="flex gap-3 items-center">
+            {selectedRowIds.length > 0 && (
+              <div className="flex items-center gap-2 bg-blue-100/50 px-3 py-1.5 rounded-lg border border-blue-200 animate-in fade-in slide-in-from-right-4 mr-2">
+                 <span className="text-sm font-bold text-blue-700 flex items-center gap-1">
+                   <CheckSquare size={14}/> 已選 {selectedRowIds.length} 筆
+                 </span>
+                 <div className="w-px h-4 bg-blue-200 mx-1"></div>
+                 <select 
+                    onChange={(e) => { handleBulkCategoryChange(e.target.value); e.target.value = ""; }}
+                    className="text-xs border-slate-300 rounded px-2 py-1 outline-none cursor-pointer text-slate-700 bg-white"
+                 >
+                    <option value="">批次更改類別...</option>
+                    {categories.map(c => <option key={c.id} value={c.label}>{c.label}</option>)}
+                 </select>
+                 <button onClick={handleBulkDelete} className="flex items-center gap-1 text-xs bg-red-50 text-red-600 border border-red-200 px-2 py-1 rounded hover:bg-red-500 hover:text-white transition">
+                   <Trash2 size={12}/> 批次刪除
+                 </button>
+              </div>
+            )}
+
             <button onClick={handleAddRow} className="flex items-center gap-2 bg-white border border-slate-300 text-slate-600 px-4 py-2 text-sm font-bold rounded-lg hover:bg-slate-100 transition shadow-sm">
-              <Plus size={16}/> 插入新資料 (至最上方)
+              <Plus size={16}/> 插入新資料
             </button>
             <button onClick={handleSave} className="flex items-center gap-2 bg-green-600 text-white px-5 py-2 text-sm font-bold rounded-lg hover:bg-green-700 shadow-sm transition">
               <Save size={16}/> 儲存變更
@@ -125,10 +186,20 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
           <table className="w-full border-collapse text-sm bg-white min-w-max">
             <thead className="sticky top-0 z-30 shadow-sm">
               <tr className="bg-slate-200 text-slate-700">
+                <th className="p-0 text-center font-bold border-b border-r border-slate-300 w-12 bg-slate-200 sticky left-0 z-40">
+                  <div className="px-3 py-3 flex items-center justify-center">
+                    <input 
+                       type="checkbox" 
+                       checked={isAllSelected}
+                       onChange={() => setSelectedRowIds(isAllSelected ? [] : localList.map(p => p.id))}
+                       className="w-4 h-4 cursor-pointer accent-blue-600"
+                    />
+                  </div>
+                </th>
                 <th className="p-0 text-left font-bold border-b border-r border-slate-300 w-24 cursor-pointer group hover:bg-slate-300 transition-colors" onClick={() => handleSort('serialNumber')}>
                   <div className="px-3 py-3 flex items-center justify-between">序號 {renderSortIcon('serialNumber')}</div>
                 </th>
-                <th className="p-0 text-left font-bold sticky left-0 z-40 bg-slate-200 border-b border-r border-slate-300 w-32 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] cursor-pointer group hover:bg-slate-300 transition-colors" onClick={() => handleSort('name')}>
+                <th className="p-0 text-left font-bold sticky left-[48px] z-40 bg-slate-200 border-b border-r border-slate-300 w-32 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] cursor-pointer group hover:bg-slate-300 transition-colors" onClick={() => handleSort('name')}>
                   <div className="px-3 py-3 flex items-center justify-between">姓名 {renderSortIcon('name')}</div>
                 </th>
                 <th className="p-0 text-left font-bold border-b border-slate-300 w-32 cursor-pointer group hover:bg-slate-300 transition-colors" onClick={() => handleSort('title')}>
@@ -146,11 +217,21 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     const ids = p.attendingSessionIds || allSessionIds;
                     return ids.includes(s.id);
                   });
+                  const sortKey = `session_${s.id}`;
+                  
                   return (
-                    <th key={s.id} className="p-2 text-center font-bold border-b border-l border-slate-300 min-w-[100px] max-w-[140px] bg-blue-50/80">
+                    // 🟢 綁定點擊表頭可以排序
+                    <th key={s.id} className="p-2 text-center font-bold border-b border-l border-slate-300 min-w-[100px] max-w-[140px] bg-blue-50/80 cursor-pointer group hover:bg-blue-100 transition-colors" onClick={() => handleSort(sortKey)}>
                       <div className="flex flex-col items-center gap-1.5">
-                        <span className="text-xs truncate w-full px-1 text-blue-800" title={s.name}>{s.name}</span>
-                        <label className="flex items-center justify-center gap-1 text-[10px] cursor-pointer text-blue-600 hover:text-blue-800 bg-white px-2 py-1 rounded border border-blue-200 shadow-sm w-full transition hover:bg-blue-50">
+                        <div className="flex items-center justify-center gap-1 w-full text-blue-800">
+                           <span className="text-xs truncate px-1" title={s.name}>{s.name}</span>
+                           {renderSortIcon(sortKey)}
+                        </div>
+                        {/* 🟢 阻止全選按鈕的點擊事件冒泡，避免觸發排序 */}
+                        <label 
+                           onClick={(e) => e.stopPropagation()}
+                           className="flex items-center justify-center gap-1 text-[10px] cursor-pointer text-blue-600 hover:text-blue-800 bg-white px-2 py-1 rounded border border-blue-200 shadow-sm w-full transition hover:bg-blue-50"
+                        >
                           <input type="checkbox" checked={isAllAttending} onChange={(e) => handleToggleSessionForAll(s.id, e.target.checked)} className="cursor-pointer accent-blue-600 w-3.5 h-3.5"/>
                           <span className="font-bold">全選</span>
                         </label>
@@ -172,19 +253,30 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
             <tbody>
               {localList.map(p => {
                 const isValidCategory = categories.some(c => c.label === p.category);
+                const isSelected = selectedRowIds.includes(p.id);
                 
                 return (
-                <tr key={p.id} className="hover:bg-blue-50 transition-colors border-b border-slate-200 group">
-                  <td className="p-0 bg-white border-r border-slate-200 group-hover:bg-blue-50 transition-colors">
-                    <input value={p.serialNumber || ''} onChange={e => handleChange(p.id, 'serialNumber', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent font-mono text-slate-600 focus:ring-2 focus:ring-blue-200" placeholder="序號"/>
+                <tr key={p.id} className={`transition-colors border-b border-slate-200 group ${isSelected ? 'bg-blue-50/80' : 'hover:bg-slate-50'}`}>
+                  <td className={`p-0 text-center border-r border-slate-200 sticky left-0 z-20 ${isSelected ? 'bg-blue-100' : 'bg-white group-hover:bg-slate-50'}`}>
+                    <label className="flex items-center justify-center w-full h-full cursor-pointer py-3">
+                       <input 
+                          type="checkbox" 
+                          checked={isSelected}
+                          onChange={() => setSelectedRowIds(prev => isSelected ? prev.filter(id => id !== p.id) : [...prev, p.id])}
+                          className="w-4 h-4 cursor-pointer accent-blue-600"
+                       />
+                    </label>
                   </td>
-                  <td className="p-0 sticky left-0 z-20 bg-white border-r border-slate-200 group-hover:bg-blue-50 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] transition-colors">
+                  <td className="p-0 bg-white border-r border-slate-200 group-hover:bg-slate-50 transition-colors">
+                    <input value={p.serialNumber || ''} onChange={e => handleChange(p.id, 'serialNumber', e.target.value)} className={`w-full px-3 py-2.5 outline-none bg-transparent font-mono text-slate-600 focus:ring-2 focus:ring-blue-200 ${isSelected ? 'bg-blue-50/50' : ''}`} placeholder="序號"/>
+                  </td>
+                  <td className={`p-0 sticky left-[48px] z-20 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] transition-colors ${isSelected ? 'bg-blue-50' : 'bg-white group-hover:bg-slate-50'}`}>
                     <input value={p.name} onChange={e => handleChange(p.id, 'name', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent font-bold text-slate-800 focus:ring-2 focus:ring-blue-200" placeholder="姓名"/>
                   </td>
                   <td className="p-0"><input value={p.title} onChange={e => handleChange(p.id, 'title', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent text-slate-600 focus:ring-2 focus:ring-blue-100" placeholder="職稱"/></td>
                   <td className="p-0"><input value={p.organization} onChange={e => handleChange(p.id, 'organization', e.target.value)} className="w-full px-3 py-2.5 outline-none bg-transparent text-slate-600 focus:ring-2 focus:ring-blue-100" placeholder="單位"/></td>
                   <td className="p-1">
-                    <select value={isValidCategory ? p.category : (p.category || '')} onChange={e => handleCategoryChange(p.id, e.target.value)} className={`w-full px-2 py-1.5 outline-none cursor-pointer rounded border border-transparent focus:border-blue-300 ${!isValidCategory ? 'text-red-500 font-bold bg-red-50' : 'bg-transparent text-slate-700 hover:bg-slate-100'}`}>
+                    <select value={isValidCategory ? p.category : (p.category || '')} onChange={e => handleCategoryChange(p.id, e.target.value)} className={`w-full px-2 py-1.5 outline-none cursor-pointer rounded border border-transparent focus:border-blue-300 ${!isValidCategory ? 'text-red-500 font-bold bg-red-50' : 'bg-transparent text-slate-700 hover:bg-white'}`}>
                        {categories.map(c => <option key={c.id} value={c.label}>{c.label}</option>)}
                        {!isValidCategory && p.category && <option value={p.category}>{p.category} (未定義)</option>}
                     </select>
