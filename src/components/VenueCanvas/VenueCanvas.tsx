@@ -13,7 +13,12 @@ import type { Seat } from '../../types';
 
 const GRID_SIZE = 10;
 
-export const VenueCanvas: React.FC = () => {
+interface VenueCanvasProps {
+    forcedViewMode?: 'seat' | 'photo';
+    isReadOnly?: boolean;
+}
+
+export const VenueCanvas: React.FC<VenueCanvasProps> = ({ forcedViewMode, isReadOnly = false }) => {
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -32,9 +37,11 @@ export const VenueCanvas: React.FC = () => {
   const [mouseGridPos, setMouseGridPos] = useState<{ x: number, y: number } | null>(null);
   const [selectionRect, setSelectionRect] = useState<{x:number, y:number, w:number, h:number} | null>(null);
 
-  // 【核心修復 1】引入 saveHistory 與 clearHistory
+  const [localScale, setLocalScale] = useState(0.4);
+  const [localPos, setLocalPos] = useState({ x: 0, y: 50 });
+
   const { 
-    isEditMode, selectedSeatIds, 
+    isEditMode, selectedSeatIds, selectedPersonForAssign, setSelectedPersonForAssign,
     isSequencing, rankSequenceCounter, isNumbering, numberSequenceCounter,
     addSeat, updateSeatPosition, unassignSeat, undo, moveSeatsBatch,
     setSelection, addToSelection, clearSelection, copySelection, pasteSelection, deleteSelectedSeats,
@@ -45,23 +52,42 @@ export const VenueCanvas: React.FC = () => {
   const { syncSeatingStatus } = usePersonnelStore();
   const { activeSessionId, sessions, categories, activeViewMode, activePhotoBatchId } = useProjectStore();
   
+  const currentViewMode = forcedViewMode || activeViewMode;
   const activeSession = sessions.find(s => s.id === activeSessionId);
   
   let seats: Seat[] = [];
-  if (activeViewMode === 'photo') {
+  if (currentViewMode === 'photo') {
       const batch = activeSession?.photoBatches?.find(b => b.id === activePhotoBatchId);
       seats = batch ? batch.spots : [];
   } else {
       seats = activeSession?.venue.seats || [];
   }
 
-  // 【核心修復 2】每當切換「場次」或「座位/拍照模式」時，強制清空歷史紀錄，防止跨時空污染！
   useEffect(() => {
-      clearHistory();
-  }, [activeSessionId, activeViewMode, activePhotoBatchId, clearHistory]);
+      if(!isReadOnly) clearHistory();
+      setLocalScale(activeSession?.venue.stageScale || 0.4);
+      setLocalPos(activeSession?.venue.stagePosition || { x: 0, y: 50 });
+  }, [activeSessionId, currentViewMode, activePhotoBatchId, clearHistory, isReadOnly, activeSession?.venue.stageScale, activeSession?.venue.stagePosition]);
 
-  const stageScale = activeSession?.venue.stageScale || 0.4;
-  const stagePosition = activeSession?.venue.stagePosition || { x: 0, y: 50 };
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        setSize({ width: containerRef.current.offsetWidth, height: containerRef.current.offsetHeight });
+      }
+    };
+    window.addEventListener('resize', updateSize);
+    updateSize();
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
+
+  useEffect(() => {
+    if (size.width > 0 && localPos.x === 0 && localPos.y === 50) {
+        setLocalScale(0.4);
+        setLocalPos({ x: (size.width - VIRTUAL_WIDTH * 0.4) / 2, y: 50 });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.width]);
+
   const backgroundImage = activeSession?.venue.backgroundImage || null;
 
   const updateSessionVenue = (updates: Record<string, any>) => {
@@ -71,29 +97,18 @@ export const VenueCanvas: React.FC = () => {
     }));
   };
 
-  const setStageScale = (val: number) => updateSessionVenue({ stageScale: val });
-  const setStagePosition = (val: {x:number, y:number}) => updateSessionVenue({ stagePosition: val });
   const setBackgroundImage = (val: string | null) => updateSessionVenue({ backgroundImage: val });
 
   const { handleWheel, handleStageMouseDown, handleStageMouseMove, handleStageMouseUp } = useCanvasControls({
     containerRef, placingBatch, setMouseGridPos,
-    setSelectionRect, selectionRect, clearContextMenu: () => setContextMenu(null), GRID_SIZE
+    setSelectionRect, selectionRect, clearContextMenu: () => setContextMenu(null), GRID_SIZE,
+    setStageScale: setLocalScale,
+    setStagePosition: setLocalPos,
+    currentViewMode
   });
 
   useEffect(() => {
-      const updateSize = () => {
-        if (containerRef.current) {
-          setSize({ width: containerRef.current.offsetWidth, height: containerRef.current.offsetHeight });
-          if (stagePosition.x === 0 && stagePosition.y === 0) {
-              setStageScale(0.4);
-              setStagePosition({ x: (containerRef.current.offsetWidth - VIRTUAL_WIDTH * 0.4)/2, y: 50 });
-          }
-        }
-      };
-      window.addEventListener('resize', updateSize);
-      updateSize();
-      
-      if (isEditMode && transformerRef.current && stageRef.current) {
+      if (isEditMode && !isReadOnly && transformerRef.current && stageRef.current) {
          const selectedNodes = stageRef.current.find('.shape-stage');
          const stageNode = selectedNodes.find(n => selectedSeatIds.includes(n.id()));
          if (stageNode) {
@@ -105,7 +120,7 @@ export const VenueCanvas: React.FC = () => {
       }
   
       const handleKeyDown = (e: KeyboardEvent) => {
-        if (!isEditMode) return;
+        if (!isEditMode || isReadOnly) return;
         if (e.key === 'Delete') { deleteSelectedSeats(); syncSeatingStatus(); }
         if (e.ctrlKey || e.metaKey) {
           if (e.key === 'c') copySelection();
@@ -116,14 +131,12 @@ export const VenueCanvas: React.FC = () => {
           if (placingBatch) setPlacingBatch(null);
           clearSelection();
           setContextMenu(null);
+          setSelectedPersonForAssign(null); 
         }
       };
       window.addEventListener('keydown', handleKeyDown);
-      return () => {
-        window.removeEventListener('resize', updateSize);
-        window.removeEventListener('keydown', handleKeyDown);
-      };
-  }, [isEditMode, selectedSeatIds, stagePosition.x, stagePosition.y, deleteSelectedSeats, syncSeatingStatus, copySelection, pasteSelection, undo, placingBatch, clearSelection]);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditMode, isReadOnly, selectedSeatIds, deleteSelectedSeats, syncSeatingStatus, copySelection, pasteSelection, undo, placingBatch, clearSelection, setSelectedPersonForAssign]);
 
   useEffect(() => {
     if (backgroundImage) {
@@ -136,22 +149,22 @@ export const VenueCanvas: React.FC = () => {
   const snapToGrid = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
 
   const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
-      if (e.evt.button === 2) return;
+      if (e.evt.button === 2 || isReadOnly) return;
       if (isEditMode && !placingBatch) {
          const isBackground = e.target === e.target.getStage() || e.target.name() === 'venue-background';
          if (isBackground && e.evt.ctrlKey) {
              const ptr = stageRef.current?.getRelativePointerPosition();
-             if (ptr) addSeat(snapToGrid(ptr.x), snapToGrid(ptr.y));
+             if (ptr) addSeat(snapToGrid(ptr.x), snapToGrid(ptr.y), currentViewMode);
          }
       }
       
       if (placingBatch && mouseGridPos) {
-         saveHistory(); // 【精準快照】矩陣生成前存檔
+         saveHistory(); 
          useProjectStore.setState(state => {
              const currSession = state.sessions.find(s => s.id === activeSessionId);
              if (!currSession) return state;
 
-             let currentSpots = activeViewMode === 'photo' 
+             let currentSpots = currentViewMode === 'photo' 
                  ? currSession.photoBatches?.find(b => b.id === activePhotoBatchId)?.spots || [] 
                  : currSession.venue.seats;
 
@@ -162,15 +175,10 @@ export const VenueCanvas: React.FC = () => {
                  for (let c = 0; c < placingBatch.cols; c++) {
                      newSeats.push({
                          id: `seat-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                         x: mouseGridPos.x + c * 110,
-                         y: mouseGridPos.y + r * 160,
-                         width: SEAT_WIDTH, height: SEAT_HEIGHT,
-                         label: `${counter++}`,
-                         type: activeViewMode === 'photo' ? 'photo' : 'seat',
-                         assignedPersonId: null,
-                         rankWeight: 50,
-                         isPinned: false,
-                         isVisible: true
+                         x: mouseGridPos.x + c * 110, y: mouseGridPos.y + r * 160,
+                         width: SEAT_WIDTH, height: SEAT_HEIGHT, label: `${counter++}`,
+                         type: currentViewMode === 'photo' ? 'photo' : 'seat',
+                         assignedPersonId: null, rankWeight: 50, isPinned: false, isVisible: true
                      });
                  }
              }
@@ -178,11 +186,8 @@ export const VenueCanvas: React.FC = () => {
              return {
                  sessions: state.sessions.map(s => {
                      if (s.id !== activeSessionId) return s;
-                     if (activeViewMode === 'photo') {
-                         return {
-                             ...s,
-                             photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: [...b.spots, ...newSeats] } : b) || []
-                         };
+                     if (currentViewMode === 'photo') {
+                         return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: [...b.spots, ...newSeats] } : b) || [] };
                      }
                      return { ...s, venue: { ...s.venue, seats: [...s.venue.seats, ...newSeats] } };
                  })
@@ -195,17 +200,15 @@ export const VenueCanvas: React.FC = () => {
   const handleSeatContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, seat: Seat) => {
       e.evt.preventDefault();
       e.cancelBubble = true;
+      if(isReadOnly) return;
       if (!selectedSeatIds.includes(seat.id)) setSelection([seat.id]);
       const stage = e.target.getStage();
       const ptr = stage?.getPointerPosition();
-      if(ptr) {
-         setContextMenu({ x: ptr.x, y: ptr.y, seatId: seat.id });
-         setBatchEditData({});
-      }
-  }, [selectedSeatIds, setSelection]);
+      if(ptr) { setContextMenu({ x: ptr.x, y: ptr.y, seatId: seat.id }); setBatchEditData({}); }
+  }, [selectedSeatIds, setSelection, isReadOnly]);
 
   const handleBatchUpdate = () => {
-      saveHistory(); // 【精準快照】右鍵批次修改前存檔
+      saveHistory(); 
       useProjectStore.setState(state => ({
           sessions: state.sessions.map(s => {
               if (s.id !== activeSessionId) return s;
@@ -219,7 +222,7 @@ export const VenueCanvas: React.FC = () => {
                   };
               });
 
-              if (activeViewMode === 'photo') {
+              if (currentViewMode === 'photo') {
                   return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: updater(b.spots) } : b) || [] };
               }
               return { ...s, venue: { ...s.venue, seats: updater(s.venue.seats) } };
@@ -230,29 +233,28 @@ export const VenueCanvas: React.FC = () => {
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (isEditMode) return;
+    if (isEditMode || isReadOnly) return;
     const personId = e.dataTransfer.getData('personId');
     if (!personId || !stageRef.current) return;
     const stage = stageRef.current;
     stage.setPointersPositions(e);
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
-    const rawX = (pointer.x - stage.x()) / stage.scaleX();
-    const rawY = (pointer.y - stage.y()) / stage.scaleY();
+    const rawX = (pointer.x - stage.x()) / localScale;
+    const rawY = (pointer.y - stage.y()) / localScale;
     const closestSeat = seats.find(seat => 
       seat.isVisible !== false && seat.type !== 'shape' && 
-      rawX >= seat.x && rawX <= seat.x + SEAT_WIDTH && 
-      rawY >= seat.y && rawY <= seat.y + SEAT_HEIGHT
+      rawX >= seat.x && rawX <= seat.x + SEAT_WIDTH && rawY >= seat.y && rawY <= seat.y + SEAT_HEIGHT
     );
     if (closestSeat) { 
-        saveHistory(); // 【精準快照】手動安排人員前存檔
+        saveHistory(); 
         updateSeatAssignment(closestSeat.id, personId); 
         syncSeatingStatus(); 
     }
   };
 
   const handleSeatDragStart = useCallback((e: Konva.KonvaEventObject<DragEvent>, seatId: string) => {
-      if (isEditMode) {
+      if (isEditMode && !isReadOnly) {
           let currentSelection = selectedSeatIds;
           if (!selectedSeatIds.includes(seatId)) {
               if (!e.evt.shiftKey) { setSelection([seatId]); currentSelection = [seatId]; } 
@@ -265,10 +267,10 @@ export const VenueCanvas: React.FC = () => {
           });
           dragStartPosRef.current = startPositions;
       }
-  }, [isEditMode, selectedSeatIds, seats, addToSelection, setSelection]);
+  }, [isEditMode, isReadOnly, selectedSeatIds, seats, addToSelection, setSelection]);
 
   const handleSeatDragMove = useCallback((e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => {
-      if (!isEditMode) return;
+      if (!isEditMode || isReadOnly) return;
       const targetX = e.evt.shiftKey ? e.target.x() : Math.round(e.target.x() / 10) * 10;
       const targetY = e.evt.shiftKey ? e.target.y() : Math.round(e.target.y() / 10) * 10;
       e.target.x(targetX); e.target.y(targetY);
@@ -288,9 +290,10 @@ export const VenueCanvas: React.FC = () => {
               }
           });
       }
-  }, [isEditMode, selectedSeatIds]);
+  }, [isEditMode, isReadOnly, selectedSeatIds]);
 
   const handleSeatDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => {
+      if(isReadOnly) return;
       if (isEditMode) {
           const targetX = e.evt.shiftKey ? e.target.x() : Math.round(e.target.x() / 10) * 10;
           const targetY = e.evt.shiftKey ? e.target.y() : Math.round(e.target.y() / 10) * 10;
@@ -301,7 +304,7 @@ export const VenueCanvas: React.FC = () => {
               const deltaX = targetX - startPos.x;
               const deltaY = targetY - startPos.y;
               if (deltaX !== 0 || deltaY !== 0) {
-                  saveHistory(); // 【精準快照】拖曳位子確定放下前存檔
+                  saveHistory();
                   const otherSelectedIds = selectedSeatIds.filter(id => id !== seat.id);
                   if (otherSelectedIds.length > 0) moveSeatsBatch(otherSelectedIds, deltaX, deltaY);
                   updateSeatPosition(seat.id, targetX, targetY);
@@ -312,15 +315,14 @@ export const VenueCanvas: React.FC = () => {
           const stage = stageRef.current;
           const pointer = stage?.getPointerPosition();
           if (pointer && stage) {
-              const rawX = (pointer.x - stage.x()) / stage.scaleX();
-              const rawY = (pointer.y - stage.y()) / stage.scaleY();
+              const rawX = (pointer.x - stage.x()) / localScale;
+              const rawY = (pointer.y - stage.y()) / localScale;
               const targetSeat = seats.find(s => 
                   s.isVisible !== false && s.type !== 'shape' && 
-                  rawX >= s.x && rawX <= s.x + SEAT_WIDTH && 
-                  rawY >= s.y && rawY <= s.y + SEAT_HEIGHT
+                  rawX >= s.x && rawX <= s.x + SEAT_WIDTH && rawY >= s.y && rawY <= s.y + SEAT_HEIGHT
               );
               if (targetSeat && targetSeat.id !== seat.id) {
-                  saveHistory(); // 【精準快照】兩個長官互換座位前存檔
+                  saveHistory();
                   const tempPersonId = targetSeat.assignedPersonId;
                   updateSeatAssignment(targetSeat.id, seat.assignedPersonId);
                   updateSeatAssignment(seat.id, tempPersonId);
@@ -329,17 +331,55 @@ export const VenueCanvas: React.FC = () => {
           }
           e.target.to({ x: seat.x, y: seat.y, duration: 0.1 });
       }
-  }, [isEditMode, seats, selectedSeatIds, moveSeatsBatch, updateSeatPosition, updateSeatAssignment, syncSeatingStatus, saveHistory]);
+  }, [isEditMode, isReadOnly, seats, selectedSeatIds, moveSeatsBatch, updateSeatPosition, updateSeatAssignment, syncSeatingStatus, saveHistory, localScale]);
 
   const handleSeatClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>, seat: Seat) => {
+      // 在下方的座位區(唯讀)點擊某個人，把它「抓」起來
+      if (isReadOnly) {
+          if (seat.assignedPersonId) {
+              e.cancelBubble = true;
+              const isSame = selectedPersonForAssign === seat.assignedPersonId;
+              setSelectedPersonForAssign(isSame ? null : seat.assignedPersonId);
+          }
+          return;
+      }
+
+      // 🟢 核心修復：在上方的拍照區，把「抓著的人」點擊放入空位
+      if (!isReadOnly && !isEditMode && currentViewMode === 'photo') {
+          const state = useProjectStore.getState();
+          // 防呆：確認這個位子是不是被死掉的幽靈 ID 佔據
+          const isOccupied = seat.assignedPersonId && state.personnel.some(p => p.id === seat.assignedPersonId);
+          
+          if (selectedPersonForAssign && !isOccupied && seat.type !== 'shape') {
+              e.cancelBubble = true;
+              saveHistory();
+
+              // 🟢 進階優化：如果長官已經在這一拍的別的座位上，先把它拔掉 (實現無縫移動)
+              const activeSession = state.sessions.find(s => s.id === activeSessionId);
+              if (activeSession) {
+                  const batch = activeSession.photoBatches?.find(b => b.id === activePhotoBatchId);
+                  if (batch) {
+                      const oldSeat = batch.spots.find(s => s.assignedPersonId === selectedPersonForAssign);
+                      if (oldSeat) {
+                          unassignSeat(oldSeat.id);
+                      }
+                  }
+              }
+
+              updateSeatAssignment(seat.id, selectedPersonForAssign);
+              setSelectedPersonForAssign(null); 
+              syncSeatingStatus();
+              return;
+          }
+      }
+
       if(isSequencing) {
-          e.cancelBubble = true;
-          saveHistory(); // 【精準快照】點擊手動設定權重前
+          e.cancelBubble = true; saveHistory();
           useProjectStore.setState(state => ({
               sessions: state.sessions.map(s => {
                   if (s.id !== activeSessionId) return s;
                   const updater = (sts: Seat[]) => sts.map(st => st.id === seat.id ? { ...st, rankWeight: Math.max(0, Math.min(100, rankSequenceCounter)) } : st);
-                  if (activeViewMode === 'photo') return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: updater(b.spots) } : b) || [] };
+                  if (currentViewMode === 'photo') return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: updater(b.spots) } : b) || [] };
                   return { ...s, venue: { ...s.venue, seats: updater(s.venue.seats) } };
               })
           }));
@@ -347,13 +387,12 @@ export const VenueCanvas: React.FC = () => {
           return;
       }
       if(isNumbering) {
-          e.cancelBubble = true;
-          saveHistory(); // 【精準快照】點擊手動改變編號前
+          e.cancelBubble = true; saveHistory();
           useProjectStore.setState(state => ({
               sessions: state.sessions.map(s => {
                   if (s.id !== activeSessionId) return s;
                   const updater = (sts: Seat[]) => sts.map(st => st.id === seat.id ? { ...st, label: String(numberSequenceCounter) } : st);
-                  if (activeViewMode === 'photo') return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: updater(b.spots) } : b) || [] };
+                  if (currentViewMode === 'photo') return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: updater(b.spots) } : b) || [] };
                   return { ...s, venue: { ...s.venue, seats: updater(s.venue.seats) } };
               })
           }));
@@ -365,10 +404,10 @@ export const VenueCanvas: React.FC = () => {
           if(e.evt.shiftKey || e.evt.ctrlKey) addToSelection([seat.id]);
           else setSelection([seat.id]);
       }
-  }, [isSequencing, isNumbering, isEditMode, rankSequenceCounter, numberSequenceCounter, addToSelection, setSelection, activeSessionId, activeViewMode, activePhotoBatchId, saveHistory]);
+  }, [isReadOnly, selectedPersonForAssign, setSelectedPersonForAssign, currentViewMode, isEditMode, isSequencing, isNumbering, rankSequenceCounter, numberSequenceCounter, addToSelection, setSelection, activeSessionId, activePhotoBatchId, saveHistory, updateSeatAssignment, syncSeatingStatus, unassignSeat]);
 
   const handleSeatUnassign = useCallback((seatId: string) => { 
-      saveHistory(); // 【精準快照】刪除座位上的人員前存檔
+      saveHistory(); 
       unassignSeat(seatId); 
       syncSeatingStatus(); 
   }, [unassignSeat, syncSeatingStatus, saveHistory]);
@@ -376,54 +415,41 @@ export const VenueCanvas: React.FC = () => {
   const handleSeatTransformEnd = useCallback((e: Konva.KonvaEventObject<Event>, seatToTransform: Seat) => {
       if (seatToTransform.type === 'shape') {
           const node = e.target;
-          const scaleX = node.scaleX();
-          const scaleY = node.scaleY();
+          const scaleX = node.scaleX(); const scaleY = node.scaleY();
           node.scaleX(1); node.scaleY(1);
           const newWidth = Math.round((seatToTransform.width || 600) * scaleX);
           const newHeight = Math.round((seatToTransform.height || 150) * scaleY);
           const newX = Math.round(node.x() / 10) * 10;
           const newY = Math.round(node.y() / 10) * 10;
           
-          saveHistory(); // 【精準快照】改變主舞台大小前存檔
+          saveHistory(); 
           const state = useProjectStore.getState();
           useProjectStore.setState({
               sessions: state.sessions.map(s => {
                   if (s.id !== activeSessionId) return s;
-                  if (activeViewMode === 'photo') {
-                      return {
-                          ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? {
-                              ...b, spots: b.spots.map(st => st.id === seatToTransform.id ? { ...st, x: newX, y: newY, width: newWidth, height: newHeight } : st)
-                          } : b)
-                      }
+                  if (currentViewMode === 'photo') {
+                      return { ...s, photoBatches: s.photoBatches?.map(b => b.id === activePhotoBatchId ? { ...b, spots: b.spots.map(st => st.id === seatToTransform.id ? { ...st, x: newX, y: newY, width: newWidth, height: newHeight } : st) } : b) }
                   }
-                  return {
-                      ...s, venue: {
-                          ...s.venue, seats: s.venue.seats.map(st => st.id === seatToTransform.id ? { ...st, x: newX, y: newY, width: newWidth, height: newHeight } : st)
-                      }
-                  }
+                  return { ...s, venue: { ...s.venue, seats: s.venue.seats.map(st => st.id === seatToTransform.id ? { ...st, x: newX, y: newY, width: newWidth, height: newHeight } : st) } }
               })
           });
       }
-  }, [activeSessionId, activeViewMode, activePhotoBatchId, saveHistory]);
+  }, [activeSessionId, currentViewMode, activePhotoBatchId, saveHistory]);
 
   return (
     <div 
       ref={containerRef} 
-      className={`relative w-full h-full bg-slate-200 overflow-hidden ${isEditMode ? 'cursor-crosshair' : 'cursor-default'}`}
+      className={`relative w-full h-full bg-slate-200 overflow-hidden ${isEditMode && !isReadOnly ? 'cursor-crosshair' : 'cursor-default'}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
       onContextMenu={(e) => e.preventDefault()}
     >
       <input type="file" ref={fileInputRef} onChange={(e) => {
           const file = e.target.files?.[0];
-          if(file) {
-              const reader = new FileReader();
-              reader.onload = () => setBackgroundImage(reader.result as string);
-              reader.readAsDataURL(file);
-          }
+          if(file) { const reader = new FileReader(); reader.onload = () => setBackgroundImage(reader.result as string); reader.readAsDataURL(file); }
       }} className="hidden" accept="image/*" />
 
-      {contextMenu && (
+      {contextMenu && !isReadOnly && (
         <div className="absolute z-50 bg-white shadow-xl rounded-lg p-3 border border-slate-200 w-64" style={{ top: contextMenu.y, left: contextMenu.x }} onMouseDown={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-2 border-b pb-2">
                 <span className="font-bold text-sm">設定 ({selectedSeatIds.length} 個)</span>
@@ -456,12 +482,33 @@ export const VenueCanvas: React.FC = () => {
         </div>
       )}
 
-      <div className="absolute top-4 left-4 z-10">
-        <button onClick={() => setShowHelp(!showHelp)} className="bg-white p-2 rounded-full shadow-md text-slate-600 hover:text-blue-600 transition"><HelpCircle size={24} /></button>
-      </div>
-      
+      {!isReadOnly && (
+        <>
+          <div className="absolute top-4 right-4 z-10">
+            <button onClick={() => setShowHelp(!showHelp)} className="bg-white p-2 rounded-full shadow-md text-slate-600 hover:text-blue-600 transition"><HelpCircle size={24} /></button>
+          </div>
+          
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-6 py-3 rounded-full shadow-2xl z-10 flex items-center gap-6 border border-slate-200">
+            <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
+              <button onClick={() => setLocalScale(Math.max(0.1, localScale - 0.1))} className="p-2 hover:bg-slate-100 rounded-full"><Minus size={18}/></button>
+              <span className="text-sm font-mono w-12 text-center font-bold text-slate-700">{(localScale * 100).toFixed(0)}%</span>
+              <button onClick={() => setLocalScale(Math.min(5, localScale + 0.1))} className="p-2 hover:bg-slate-100 rounded-full"><Plus size={18}/></button>
+            </div>
+            
+            {isEditMode && (
+              <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
+                 <button onClick={undo} className="p-2 hover:bg-slate-100 rounded" title="復原 (Ctrl+Z)"><RotateCcw size={18} /></button>
+                 <button onClick={() => setShowBatchModal(true)} className="p-2 hover:bg-slate-100 rounded text-blue-600" title="矩陣生成"><Grid3X3 size={18} /></button>
+                 <button onClick={deleteSelectedSeats} className="p-2 hover:bg-red-50 rounded text-red-600" title="刪除選取 (Del)"><Eraser size={18} /></button>
+                 <button onClick={toggleMainStage} className="p-2 hover:bg-slate-100 rounded text-purple-600" title="切換主舞台"><Maximize size={18}/></button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
       {showHelp && (
-        <div className="absolute top-16 left-4 bg-white p-5 rounded-xl shadow-2xl w-80 md:w-96 z-50 border border-slate-200 text-sm max-h-[80vh] overflow-y-auto custom-scrollbar">
+        <div className="absolute top-16 right-4 bg-white p-5 rounded-xl shadow-2xl w-80 md:w-96 z-50 border border-slate-200 text-sm max-h-[80vh] overflow-y-auto custom-scrollbar">
           <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
               <h2 className="font-bold text-slate-800 text-base">操作快捷鍵指南 (v4.0)</h2>
               <button onClick={() => setShowHelp(false)} className="p-1 hover:bg-slate-100 rounded-full text-slate-500 transition"><X size={18}/></button>
@@ -471,31 +518,7 @@ export const VenueCanvas: React.FC = () => {
                 <strong className="text-slate-800 flex items-center gap-1 mb-1">🔍 視角控制</strong>
                 <ul className="list-disc pl-5 space-y-1.5 text-xs">
                     <li><strong>平移畫布：</strong>在空白處按住「左鍵」拖曳</li>
-                    <li><strong>縮放畫布：</strong>滑鼠滾輪，或使用下方 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 rounded font-mono">+</kbd> / <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 rounded font-mono">-</kbd></li>
-                </ul>
-            </div>
-            <div>
-                <strong className="text-red-600 flex items-center gap-1 mb-1">🏗️ 場地編輯模式</strong>
-                <ul className="list-disc pl-5 space-y-1.5 text-xs">
-                    <li><strong>新增座位：</strong>按住 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 py-0.5 rounded font-mono">Ctrl</kbd> + 左鍵點擊空白處</li>
-                    <li><strong>框選多個：</strong>按住 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 py-0.5 rounded font-mono">Shift</kbd> + 左鍵拖曳</li>
-                    <li><strong>批次修改：</strong>選取多個座位後按「右鍵」</li>
-                    <li><strong>複製貼上：</strong><kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 py-0.5 rounded font-mono">Ctrl+C</kbd> / <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 py-0.5 rounded font-mono">Ctrl+V</kbd></li>
-                    <li><strong>刪除座位：</strong>選取後按 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 py-0.5 rounded font-mono">Delete</kbd></li>
-                </ul>
-            </div>
-            <div>
-                <strong className="text-blue-600 flex items-center gap-1 mb-1">👤 人員排位模式</strong>
-                <ul className="list-disc pl-5 space-y-1.5 text-xs">
-                    <li><strong>手動入座：</strong>從左側名單拖曳至空位</li>
-                    <li><strong>交換座位：</strong>將畫布上的人拖到另一人上方</li>
-                    <li><strong>移出座位：</strong>點擊名牌右上角的紅色小 <span className="bg-red-500 text-white rounded-full px-1.5 py-0.5 font-bold text-[8px]">×</span></li>
-                </ul>
-            </div>
-            <div>
-                <strong className="text-emerald-600 flex items-center gap-1 mb-1">⏳ 全局操作</strong>
-                <ul className="list-disc pl-5 space-y-1 text-xs">
-                    <li><strong>復原上一步：</strong><kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 py-0.5 rounded font-mono">Ctrl+Z</kbd></li>
+                    <li><strong>縮放畫布：</strong>滑鼠滾輪，或使用下方 <kbd className="bg-slate-100 border border-slate-300 shadow-sm px-1.5 rounded font-mono">+</kbd></li>
                 </ul>
             </div>
           </div>
@@ -506,23 +529,6 @@ export const VenueCanvas: React.FC = () => {
         <GridGenerateModal onClose={() => setShowBatchModal(false)} onConfirm={(rows, cols) => { setPlacingBatch({rows, cols}); setShowBatchModal(false); }} />
       )}
 
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-6 py-3 rounded-full shadow-2xl z-10 flex items-center gap-6 border border-slate-200">
-        <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
-          <button onClick={() => setStageScale(Math.max(0.1, stageScale - 0.1))} className="p-2 hover:bg-slate-100 rounded-full"><Minus size={18}/></button>
-          <span className="text-sm font-mono w-12 text-center font-bold text-slate-700">{(stageScale * 100).toFixed(0)}%</span>
-          <button onClick={() => setStageScale(Math.min(5, stageScale + 0.1))} className="p-2 hover:bg-slate-100 rounded-full"><Plus size={18}/></button>
-        </div>
-        
-        {isEditMode && (
-          <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
-             <button onClick={undo} className="p-2 hover:bg-slate-100 rounded" title="復原 (Ctrl+Z)"><RotateCcw size={18} /></button>
-             <button onClick={() => setShowBatchModal(true)} className="p-2 hover:bg-slate-100 rounded text-blue-600" title="矩陣生成"><Grid3X3 size={18} /></button>
-             <button onClick={deleteSelectedSeats} className="p-2 hover:bg-red-50 rounded text-red-600" title="刪除選取 (Del)"><Eraser size={18} /></button>
-             <button onClick={toggleMainStage} className="p-2 hover:bg-slate-100 rounded text-purple-600" title="切換主舞台"><Maximize size={18}/></button>
-          </div>
-        )}
-      </div>
-
       {size.width > 0 && size.height > 0 && (
         <Stage 
           width={size.width} height={size.height} 
@@ -532,14 +538,16 @@ export const VenueCanvas: React.FC = () => {
           onMouseUp={handleStageMouseUp}
           onClick={handleStageClick}
           onWheel={handleWheel}
-          scaleX={stageScale} scaleY={stageScale} x={stagePosition.x} y={stagePosition.y}
+          
+          scaleX={localScale} scaleY={localScale} x={localPos.x} y={localPos.y}
+          
           onContextMenu={(e) => e.evt.preventDefault()}
         >
           <Layer>
-            <Rect name="venue-background" x={0} y={0} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} fill="white" shadowBlur={20} shadowOpacity={0.1}/>
+            <Rect name="venue-background" x={0} y={0} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} fill={isReadOnly ? "#f8fafc" : "white"} shadowBlur={isReadOnly ? 0 : 20} shadowOpacity={0.1}/>
             {bgImageObj && <KonvaImage image={bgImageObj} width={VIRTUAL_WIDTH} height={VIRTUAL_HEIGHT} opacity={0.5} />}
             
-            {isEditMode && (
+            {isEditMode && !isReadOnly && (
                 <Group opacity={0.3}>
                    {Array.from({ length: 40 }).map((_, i) => <Line key={`gx-${i}`} points={[i*100,0, i*100,VIRTUAL_HEIGHT]} stroke="#cbd5e1" strokeWidth={1} />)}
                    {Array.from({ length: 30 }).map((_, i) => <Line key={`gy-${i}`} points={[0,i*100, VIRTUAL_WIDTH,i*100]} stroke="#cbd5e1" strokeWidth={1} />)}
@@ -568,6 +576,8 @@ export const VenueCanvas: React.FC = () => {
                   rankSequenceCounter={rankSequenceCounter}
                   isNumbering={isNumbering}
                   numberSequenceCounter={numberSequenceCounter}
+                  isReadOnly={isReadOnly}
+                  isPickedUp={seat.assignedPersonId === selectedPersonForAssign && selectedPersonForAssign !== null}
                   onDragStart={handleSeatDragStart}
                   onDragMove={handleSeatDragMove}
                   onDragEnd={handleSeatDragEnd}

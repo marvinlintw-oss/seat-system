@@ -80,7 +80,10 @@ export const SpreadsheetModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
         if (!valA) valA = ''; if (!valB) valB = '';
         if (typeof valA === 'string' && typeof valB === 'string') {
-          return direction === 'asc' ? valA.localeCompare(valB, 'zh-TW') : valB.localeCompare(valA, 'zh-TW');
+          // 🟢 核心修復：加入 { numeric: true } 啟用自然排序引擎！
+          return direction === 'asc' 
+             ? valA.localeCompare(valB, 'zh-TW', { numeric: true }) 
+             : valB.localeCompare(valA, 'zh-TW', { numeric: true });
         }
         if (typeof valA === 'number' && typeof valB === 'number') {
           return direction === 'asc' ? valA - valB : valB - valA;

@@ -34,7 +34,8 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
       }
 
       log(`正在讀取試算表資料...`);
-      const rawData = await fetchSpreadsheetData(targetId, '工作表1!A:Z');
+      // 🟢 呼叫升級版的 API，自動拿回真實的 SheetName 和資料
+      const { values: rawData, sheetName } = await fetchSpreadsheetData(targetId, 'A:Z');
       
       if (!rawData || rawData.length === 0) {
           log('❌ 試算表是空的！請確保有資料。');
@@ -50,7 +51,7 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
           setIsSyncing(false); return;
       }
 
-      log(`開始執行 Diffing 引擎比對...`);
+      log(`✅ 成功連線分頁「${sheetName}」，開始比對資料...`);
       let added = 0, updated = 0;
       const newPersonnelList = [...personnel];
       const generateUUID = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ext-${Date.now()}`;
@@ -99,13 +100,15 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
           pushData.push(rowData);
       });
 
-      await updateSpreadsheetData(targetId, '工作表1!A1', pushData);
+      // 🟢 寫回時也使用動態抓到的真實 sheetName，保證不踩雷！
+      await updateSpreadsheetData(targetId, `${sheetName}!A1`, pushData);
       
       log(`✅ Push 完成：已將最新名單與座位代碼寫回 Google Sheet！`);
       log(`🎉 雙向同步大功告成！`);
 
     } catch (error: any) {
-        log(`❌ 同步失敗: ${error.message}`);
+        // 🟢 將系統翻譯過的錯誤訊息印在畫面上
+        log(`❌ ${error.message}`);
     } finally {
         setIsSyncing(false);
     }
@@ -139,7 +142,6 @@ export const DataSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
                ) : (
                    syncLog.map((l, i) => <div key={i} className="mb-1">{`> ${l}`}</div>)
                )}
-               {/* 【修正】解決 JSX 中的大於符號報錯，改用 &gt; */}
                {isSyncing && <div className="animate-pulse mt-2">&gt; 處理中，請勿關閉視窗...</div>}
            </div>
         </div>

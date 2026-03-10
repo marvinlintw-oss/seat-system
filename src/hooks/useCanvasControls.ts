@@ -1,27 +1,33 @@
 // src/hooks/useCanvasControls.ts
 import { useState, useRef, useCallback } from 'react';
+import type React from 'react';
 import type Konva from 'konva';
 import { useVenueStore } from '../store/useVenueStore';
 import { useProjectStore } from '../store/useProjectStore';
 import type { Seat } from '../types';
 
 interface CanvasControlsOptions {
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   placingBatch: { rows: number; cols: number } | null;
-  setMouseGridPos: (pos: { x: number; y: number } | null) => void;
-  setSelectionRect: (rect: { x: number; y: number; w: number; h: number } | null) => void;
+  setMouseGridPos: React.Dispatch<React.SetStateAction<{ x: number; y: number } | null>>;
+  setSelectionRect: React.Dispatch<React.SetStateAction<{ x: number; y: number; w: number; h: number } | null>>;
   selectionRect: { x: number; y: number; w: number; h: number } | null;
   clearContextMenu: () => void;
   GRID_SIZE: number;
+  
+  // 🟢 嚴格對應 useState 的 Dispatch 型別，完美解決 TS 報錯！
+  setStageScale: React.Dispatch<React.SetStateAction<number>>;
+  setStagePosition: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>;
+  currentViewMode: string;
 }
 
 export const useCanvasControls = ({
-  containerRef, placingBatch, setMouseGridPos, setSelectionRect, selectionRect, clearContextMenu, GRID_SIZE
+  containerRef, placingBatch, setMouseGridPos, setSelectionRect, selectionRect, clearContextMenu, GRID_SIZE,
+  setStageScale, setStagePosition, currentViewMode
 }: CanvasControlsOptions) => {
-  const { isEditMode, setStageScale, setStagePosition, addToSelection, clearSelection } = useVenueStore();
   
-  // 【核心修復】引入 activeViewMode 與 activePhotoBatchId 來判斷目前模式
-  const { sessions, activeSessionId, activeViewMode, activePhotoBatchId } = useProjectStore();
+  const { isEditMode, addToSelection, clearSelection } = useVenueStore();
+  const { sessions, activeSessionId, activePhotoBatchId } = useProjectStore();
 
   const [isPanning, setIsPanning] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
@@ -30,9 +36,8 @@ export const useCanvasControls = ({
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
   
-  // 【核心修復】智能路由：依據模式抓取對應的畫布陣列，讓框選能對應到正確的點位
   let seats: Seat[] = [];
-  if (activeViewMode === 'photo') {
+  if (currentViewMode === 'photo') {
       const batch = activeSession?.photoBatches?.find(b => b.id === activePhotoBatchId);
       seats = batch ? batch.spots : [];
   } else {
@@ -48,6 +53,7 @@ export const useCanvasControls = ({
     const oldScale = stage.scaleX();
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
+    
     const mousePointTo = { x: (pointer.x - stage.x()) / oldScale, y: (pointer.y - stage.y()) / oldScale };
     let newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
     newScale = Math.max(0.1, Math.min(newScale, 5));
@@ -124,7 +130,6 @@ export const useCanvasControls = ({
     if (containerRef.current) containerRef.current.style.cursor = isEditMode ? 'crosshair' : 'default';
 
     if (isSelecting.current && selectionRect) {
-       // 【核心發揮作用】這裡的 seats 陣列已經根據模式切換過了，所以框選計算會完全正確！
        const selected = seats.filter((s: Seat) => 
           s.isVisible !== false && s.type !== 'shape' &&
           s.x >= selectionRect.x &&

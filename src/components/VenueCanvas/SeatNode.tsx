@@ -16,6 +16,8 @@ interface SeatNodeProps {
   rankSequenceCounter: number;
   isNumbering: boolean;
   numberSequenceCounter: number;
+  isReadOnly?: boolean;
+  isPickedUp?: boolean;
   onDragStart: (e: Konva.KonvaEventObject<DragEvent>, seatId: string) => void;
   onDragMove: (e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>, seat: Seat) => void;
@@ -27,6 +29,7 @@ interface SeatNodeProps {
 
 export const SeatNode: React.FC<SeatNodeProps> = memo(({
   seat, isSelected, isEditMode, isSequencing, rankSequenceCounter, isNumbering, numberSequenceCounter,
+  isReadOnly = false, isPickedUp = false,
   onDragStart, onDragMove, onDragEnd, onClick, onContextMenu, onUnassign, onTransformEnd
 }) => {
   const { personnel, categories, activeSessionId, sessions } = useProjectStore();
@@ -54,9 +57,10 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
   const photoText = hasPhoto ? `📷 參與 ${batchNumbers.join(', ')} 拍` : '';
   const badgeColor = participatingBatches.length === 1 ? participatingBatches[0].color : '#475569';
 
-  const stroke = seat.isPinned ? '#ef4444' : (isSelected ? '#2563eb' : '#94a3b8');
-  const strokeWidth = isSelected ? 3 : 2;
-  const isDraggable = (isEditMode && !seat.isPinned && !isSequencing && !isNumbering) || (!isEditMode && !!occupant);
+  const stroke = isPickedUp ? '#f59e0b' : (seat.isPinned ? '#ef4444' : (isSelected ? '#2563eb' : '#94a3b8'));
+  const strokeWidth = isPickedUp ? 4 : (isSelected ? 3 : 2);
+  
+  const isDraggable = !isReadOnly && ((isEditMode && !seat.isPinned && !isSequencing && !isNumbering) || (!isEditMode && !!occupant));
   const shapeW = Math.max(10, seat.width || 600);
   const shapeH = Math.max(10, seat.height || 150);
 
@@ -71,7 +75,7 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
   const handleDragEndLocal = (e: Konva.KonvaEventObject<DragEvent>) => {
       const group = e.currentTarget as Konva.Group;
       const bg = group.findOne('.seat-bg') as Konva.Rect | undefined;
-      if (bg) bg.shadowBlur(5);
+      if (bg) bg.shadowBlur(isPickedUp ? 15 : 5);
       onDragEnd(e, seat);
   };
 
@@ -89,11 +93,11 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
         </Group>
       ) : (
         <Group>
-          <Rect name="seat-bg" width={SEAT_WIDTH} height={SEAT_HEIGHT} fill={zoneColor} stroke={stroke} strokeWidth={strokeWidth} cornerRadius={4} shadowColor="black" shadowOpacity={0.1} shadowBlur={5} perfectDrawEnabled={false} />
+          <Rect name="seat-bg" width={SEAT_WIDTH} height={SEAT_HEIGHT} fill={zoneColor} stroke={stroke} strokeWidth={strokeWidth} cornerRadius={4} shadowColor={isPickedUp ? "#f59e0b" : "black"} shadowOpacity={isPickedUp ? 0.8 : 0.1} shadowBlur={isPickedUp ? 15 : 5} perfectDrawEnabled={false} />
           <Rect x={0} y={0} width={SEAT_WIDTH} height={25} fill="rgba(0,0,0,0.1)" cornerRadius={[4,4,0,0]} stroke={stroke} strokeWidth={0} perfectDrawEnabled={false} />
           
           {occupant?.serialNumber && (
-            <Group x={0} y={0} listening={false}>
+            <Group x={0} y={0} listening={false} name="serial-number-group">
               <Rect width={28} height={25} fill="rgba(255,255,255,0.6)" cornerRadius={[4,0,0,0]} perfectDrawEnabled={false} />
               <Text text={occupant.serialNumber} x={0} y={7} width={28} align="center" fontSize={11} fill="#334155" fontStyle="bold" wrap="none" />
             </Group>
@@ -104,36 +108,9 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
           
           {occupant ? (
             <Group listening={false}>
-              
-              <Text 
-                 text={occupant.organization} 
-                 x={4} y={26} 
-                 width={SEAT_WIDTH-8} height={32} 
-                 align="center" verticalAlign="middle" 
-                 fontSize={12} fill="#1e293b" fontStyle="bold" 
-                 wrap="char" lineHeight={1.2} ellipsis={true} 
-              />
-              
-              {/* 🟢 姓名加大一級 (20 -> 22)，並微調框框高度確保兩行能塞下 */}
-              <Text 
-                 text={occupant.name} 
-                 x={2} y={58} 
-                 width={SEAT_WIDTH-4} height={56} 
-                 align="center" verticalAlign="middle" 
-                 fontSize={25} fill="#0f172a" fontStyle="bold" 
-                 wrap="char" lineHeight={1.1} ellipsis={true} 
-              />
-              
-              {/* 🟢 職稱加大一級 (12 -> 14)，下移並支援兩行 wrap="char" */}
-              <Text 
-                 text={occupant.title} 
-                 x={4} y={112} 
-                 width={SEAT_WIDTH-8} height={hasPhoto ? 16 : 30} 
-                 align="center" verticalAlign="middle"
-                 fontSize={16} fill="#334155" wrap="char" 
-                 lineHeight={1.1} ellipsis={true} 
-              />
-              
+              <Text text={occupant.organization} x={4} y={26} width={SEAT_WIDTH-8} height={32} align="center" verticalAlign="middle" fontSize={12} fill="#1e293b" fontStyle="bold" wrap="char" lineHeight={1.2} ellipsis={true} />
+              <Text text={occupant.name} x={2} y={58} width={SEAT_WIDTH-4} height={56} align="center" verticalAlign="middle" fontSize={25} fill="#0f172a" fontStyle="bold" wrap="char" lineHeight={1.1} ellipsis={true} />
+              <Text text={occupant.title} x={4} y={112} width={SEAT_WIDTH-8} height={hasPhoto ? 16 : 30} align="center" verticalAlign="middle" fontSize={16} fill="#334155" wrap="char" lineHeight={1.1} ellipsis={true} />
               {occupant.remarks && <Text text="📝" x={SEAT_WIDTH - 20} y={30} fontSize={12} name="hide-on-export" />}
             </Group>
           ) : (
@@ -147,7 +124,7 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
           )}
 
           {hasPhoto && (
-             <Group x={0} y={SEAT_HEIGHT - 22} listening={false}>
+             <Group x={0} y={SEAT_HEIGHT - 22} listening={false} name="photo-badge-group">
                <Rect width={SEAT_WIDTH} height={22} fill={badgeColor} cornerRadius={[0,0,4,4]} perfectDrawEnabled={false}/>
                <Text text={photoText} x={0} y={5} width={SEAT_WIDTH} align="center" fontSize={11} fill="white" fontStyle="bold" wrap="none" ellipsis={true} />
              </Group>
@@ -160,28 +137,29 @@ export const SeatNode: React.FC<SeatNodeProps> = memo(({
             </Label>
           )}
 
-          {!isEditMode && occupant && (
+          {!isEditMode && !isReadOnly && occupant && (
             <Group x={80} y={20} onClick={(e) => { e.cancelBubble=true; onUnassign(seat.id); }} name="hide-on-export">
               <Circle radius={8} fill="#ef4444" />
               <Text text="×" x={-3} y={-4} fontSize={10} fill="white" fontStyle="bold" listening={false}/>
             </Group>
           )}
 
-          {isEditMode && (
+          {isEditMode && !isReadOnly && (
             <Group x={SEAT_WIDTH-25} y={SEAT_HEIGHT-25} listening={false}>
               <Rect width={25} height={20} fill="#ef4444" cornerRadius={4} perfectDrawEnabled={false}/>
               <Text text={String(seat.rankWeight)} x={0} y={4} width={25} align="center" fill="white" fontSize={10} fontStyle="bold"/>
             </Group>
           )}
 
-          {isSequencing && (
+          {/* 🟢 漏貼的這兩段補回來了！手動連號的藍綠色數字圓圈 */}
+          {isSequencing && !isReadOnly && (
             <Group x={SEAT_WIDTH/2} y={SEAT_HEIGHT/2} listening={false}>
               <Circle radius={15} fill="rgba(37, 99, 235, 0.9)" />
               <Text text={String(rankSequenceCounter)} x={-15} y={-6} width={30} align="center" fill="white" fontSize={12} fontStyle="bold" />
             </Group>
           )}
 
-          {isNumbering && (
+          {isNumbering && !isReadOnly && (
             <Group x={SEAT_WIDTH/2} y={SEAT_HEIGHT/2} listening={false}>
               <Circle radius={15} fill="rgba(34, 197, 94, 0.9)" />
               <Text text={String(numberSequenceCounter)} x={-15} y={-6} width={30} align="center" fill="white" fontSize={12} fontStyle="bold" />

@@ -2,11 +2,14 @@
 import Konva from 'konva';
 import { useProjectStore } from '../store/useProjectStore';
 import type { ExportOptions } from '../components/Modals/ExportOptionsModal';
+import type { Seat } from '../types';
 
-// 🟢 提供一個空的備用 exportCanvas 以防有其他舊元件引入報錯
 export const exportCanvas = () => {};
 
 export const exportHighResChart = (stageWidth: number, stageHeight: number, options: ExportOptions, format: 'svg' | 'png' | 'pdf') => {
+  void stageWidth;
+  void stageHeight;
+
   const stage = Konva.stages[0];
   if (!stage) {
       alert('找不到畫布元件，請確認畫面已載入。');
@@ -16,6 +19,14 @@ export const exportHighResChart = (stageWidth: number, stageHeight: number, opti
   const { projectName, sessions, activeSessionId, activeViewMode, activePhotoBatchId } = useProjectStore.getState();
   const activeSession = sessions.find(s => s.id === activeSessionId);
   if (!activeSession) return;
+
+  let seats: Seat[] = [];
+  if (activeViewMode === 'photo') {
+      const batch = activeSession.photoBatches?.find(b => b.id === activePhotoBatchId);
+      seats = batch ? batch.spots : [];
+  } else {
+      seats = activeSession.venue.seats || [];
+  }
 
   let titleText = `${projectName} - ${activeSession.name}`;
   let modeStr = '座位圖';
@@ -47,41 +58,90 @@ export const exportHighResChart = (stageWidth: number, stageHeight: number, opti
   const oldScale = stage.scaleX();
   const oldPos = stage.position();
 
-  const originalTextAttrs: { node: Konva.Text, fill: any, fontFamily: string }[] = [];
+  let maxSeatX = 1000;
+  let maxSeatY = 800;
+  if (seats.length > 0) {
+      maxSeatX = Math.max(...seats.map(s => s.x + (s.width || 100)));
+      maxSeatY = Math.max(...seats.map(s => s.y + (s.height || 150)));
+  }
+
+  const EXPORT_WIDTH = Math.max(1200, maxSeatX + 150); 
+  const CONTENT_Y_OFFSET = 240; 
+  const EXPORT_HEIGHT = maxSeatY + CONTENT_Y_OFFSET + 150; 
+
+  const mainLayer = stage.getLayers()[0];
+  const oldMainLayerY = mainLayer.y();
+  
+  const bgRects = stage.find('.venue-background') as Konva.Rect[];
+  const oldBgAttrs: { node: Konva.Rect, y: number, width: number, height: number }[] = [];
+
+  const originalTextAttrs: { node: Konva.Text, fill: string, fontFamily: string }[] = [];
   const hiddenNodes = stage.find('.hide-on-export');
+  
+  const serialNodes = stage.find('.serial-number-group');
+  const badgeNodes = stage.find('.photo-badge-group');
 
   try {
-      const titleLayer = new Konva.Layer();
-      const titleNode = new Konva.Text({
-          x: 40, y: 40,
-          text: `${titleText}\n匯出時間：${displayTime}`,
-          fontSize: 28,
-          fontFamily: 'sans-serif',
-          fontStyle: 'bold',
-          fill: '#0F172A',
-          lineHeight: 1.5
+      hiddenNodes.forEach(node => node.hide());
+      
+      if (options.includeSerialNumber === false) serialNodes.forEach(n => n.hide());
+      if (options.includePhotoBadges === false) badgeNodes.forEach(n => n.hide());
+
+      mainLayer.y(CONTENT_Y_OFFSET);
+
+      bgRects.forEach(rect => {
+          oldBgAttrs.push({ node: rect, y: rect.y(), width: rect.width(), height: rect.height() });
+          rect.y(-CONTENT_Y_OFFSET);
+          rect.width(EXPORT_WIDTH);
+          rect.height(EXPORT_HEIGHT);
       });
-      titleLayer.add(titleNode);
+
+      const titleLayer = new Konva.Layer();
+      const showTitle = options.exportTitle !== false; 
+      const showTime = options.exportTime !== false;
+
+      let currentY = 160; 
+
+      if (showTitle) {
+          const titleNode = new Konva.Text({
+              x: 150, y: currentY, 
+              text: titleText,
+              fontSize: 60, 
+              fontFamily: 'sans-serif',
+              fontStyle: 'bold',
+              fill: '#0F172A',
+          });
+          titleLayer.add(titleNode);
+          currentY += 80; 
+      }
+
+      if (showTime) {
+          const timeNode = new Konva.Text({
+              x: 150, y: currentY, 
+              text: `匯出時間：${displayTime}`,
+              fontSize: 32, 
+              fontFamily: 'sans-serif',
+              fill: '#64748B',
+          });
+          titleLayer.add(timeNode);
+      }
+      
       stage.add(titleLayer);
 
-      // 🟢 修復：直接使用傳入的 stageWidth 與 stageHeight，完美消除 ts(6133) 黃線警告！
-      stage.width(stageWidth);
-      stage.height(stageHeight);
+      stage.width(EXPORT_WIDTH);
+      stage.height(EXPORT_HEIGHT);
       stage.scale({ x: 1, y: 1 });
       stage.position({ x: 0, y: 0 });
 
-      hiddenNodes.forEach(node => node.hide());
+      const textNodes = stage.find('Text') as Konva.Text[];
 
-      const textNodes = stage.find('Text');
-
-      textNodes.forEach(baseNode => {
-          const node = baseNode as Konva.Text;
-          if (node === titleNode) return;
+      textNodes.forEach(node => {
           if (node.getParent()?.name() === 'hide-on-export') return;
+          if (node.getLayer() === titleLayer) return; 
 
           originalTextAttrs.push({
               node: node,
-              fill: node.fill(),
+              fill: node.fill() as string,
               fontFamily: node.fontFamily()
           });
 
@@ -89,10 +149,7 @@ export const exportHighResChart = (stageWidth: number, stageHeight: number, opti
           const isWhite = currentFill === '#ffffff' || currentFill === 'white' || currentFill === 'rgba(255,255,255,1)';
           
           let newFill = currentFill;
-
-          if (!isWhite) {
-              newFill = '#0F172A'; 
-          }
+          if (!isWhite) newFill = '#0F172A'; 
 
           node.setAttrs({
               fill: newFill,
@@ -115,10 +172,10 @@ export const exportHighResChart = (stageWidth: number, stageHeight: number, opti
       link.href = dataURL;
       link.click();
 
-      // 貼心提醒：告知使用者我們為了防亂碼已統一為 PNG
+      // 🟢 漏貼的這段補回來了！專屬 PDF / SVG 匯出時的提醒視窗
       if (format === 'pdf' || format === 'svg') {
           setTimeout(() => {
-              alert(`💡 【高畫質無損匯出成功】\n\n為解決不同電腦產生的亂碼(豆腐塊)與跑版問題，系統已統一為您輸出 ${exportPixelRatio} 倍畫質的完美 PNG 圖檔！\n\n📄 若需 PDF：請開啟剛下載的圖片，按 [Ctrl+P] 列印並選「另存為 PDF」。`);
+              alert(`💡 【高畫質無損匯出成功】\n\n系統已為您統一輸出 ${exportPixelRatio} 倍畫質的完美 PNG 圖檔！\n\n📄 若需 PDF 格式：請開啟剛下載的圖片，按 [Ctrl+P] 列印並選擇「另存為 PDF」。`);
           }, 500);
       }
 
@@ -127,6 +184,9 @@ export const exportHighResChart = (stageWidth: number, stageHeight: number, opti
       alert('匯出時發生錯誤');
   } finally {
       hiddenNodes.forEach(node => node.show());
+      
+      serialNodes.forEach(n => n.show());
+      badgeNodes.forEach(n => n.show());
 
       originalTextAttrs.forEach(attr => {
           attr.node.setAttrs({
@@ -135,9 +195,19 @@ export const exportHighResChart = (stageWidth: number, stageHeight: number, opti
           });
       });
 
+      oldBgAttrs.forEach(attr => {
+          attr.node.setAttrs({
+              y: attr.y,
+              width: attr.width,
+              height: attr.height
+          });
+      });
+
+      mainLayer.y(oldMainLayerY);
+
       const layers = stage.getLayers();
       const lastLayer = layers[layers.length - 1];
-      if (lastLayer) {
+      if (lastLayer && lastLayer !== mainLayer) {
           lastLayer.destroy(); 
       }
       

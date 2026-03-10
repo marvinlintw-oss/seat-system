@@ -53,7 +53,6 @@ export const initGoogleAPI = (): Promise<void> => {
   });
 };
 
-// 【核心新增】清除過期的 Token，用於強制重新連線
 export const clearGoogleToken = () => {
   accessToken = null;
 };
@@ -67,12 +66,10 @@ export const requireLogin = (): Promise<string> => {
       accessToken = resp.access_token;
       resolve(resp.access_token);
     };
-    // 取消強制的 consent 畫面，讓 Google 自動判定若已授權則靜默刷新 Token
     tokenClient.requestAccessToken({ prompt: '' }); 
   });
 };
 
-// 選擇檔案/試算表
 export const showDrivePicker = async (type: 'json' | 'spreadsheet' = 'json'): Promise<{ id: string; name: string } | null> => {
   const token = await requireLogin();
   return new Promise((resolve) => {
@@ -90,7 +87,6 @@ export const showDrivePicker = async (type: 'json' | 'spreadsheet' = 'json'): Pr
   });
 };
 
-// 選擇資料夾 (Save As 專用)
 export const showFolderPicker = async (): Promise<{ id: string; name: string } | null> => {
   const token = await requireLogin();
   return new Promise((resolve) => {
@@ -144,12 +140,44 @@ export const saveFileToDrive = async (fileName: string, data: any, existingFileI
   return result.id;
 };
 
-export const fetchSpreadsheetData = async (spreadsheetId: string, range: string): Promise<string[][]> => {
+// 🟢 升級版：智慧抓取真實的分頁名稱，並攔截 API 錯誤訊息
+export const fetchSpreadsheetData = async (spreadsheetId: string, fallbackRange: string = 'A:Z'): Promise<{values: string[][], sheetName: string}> => {
   const token = await requireLogin();
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error('無法讀取試算表');
+
+  // 1. 先取得試算表 Meta，抓出第一個工作表的真實名稱
+  const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, {
+     headers: { Authorization: `Bearer ${token}` }
+  });
+
+  if (!metaRes.ok) {
+     const errInfo = await metaRes.json().catch(() => ({}));
+     const errMsg = errInfo.error?.message || '';
+     if (errMsg.includes('API has not been used')) {
+         throw new Error('尚未啟用 API！請至 Google Cloud Console 啟用「Google Sheets API」。');
+     }
+     if (metaRes.status === 403) {
+         throw new Error('權限不足！請確認登入時有勾選「查看與編輯 Google 試算表」的權限。');
+     }
+     throw new Error(`讀取試算表資訊失敗: ${errMsg}`);
+  }
+
+  const meta = await metaRes.json();
+  const firstSheetName = meta.sheets[0].properties.title; // 智慧取得真實名稱 (例如: Sheet1, 工作表1)
+
+  // 2. 組合正確的 Range 去抓資料
+  const safeRange = fallbackRange.includes('!') ? fallbackRange.split('!')[1] : fallbackRange;
+  const finalRange = `${firstSheetName}!${safeRange}`;
+
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${finalRange}`, {
+     headers: { Authorization: `Bearer ${token}` }
+  });
+
+  if (!response.ok) {
+     const errInfo = await response.json().catch(() => ({}));
+     throw new Error(`讀取資料失敗: ${errInfo.error?.message || response.statusText}`);
+  }
   const result = await response.json();
-  return result.values || [];
+  return { values: result.values || [], sheetName: firstSheetName };
 };
 
 export const updateSpreadsheetData = async (spreadsheetId: string, range: string, values: string[][]): Promise<void> => {
@@ -157,5 +185,8 @@ export const updateSpreadsheetData = async (spreadsheetId: string, range: string
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`, {
     method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ values })
   });
-  if (!response.ok) throw new Error('無法寫入試算表');
+  if (!response.ok) {
+     const errInfo = await response.json().catch(() => ({}));
+     throw new Error(`寫回試算表失敗: ${errInfo.error?.message || response.statusText}`);
+  }
 };

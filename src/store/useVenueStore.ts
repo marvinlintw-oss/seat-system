@@ -21,7 +21,6 @@ const updateActiveSession = (updater: (session: Session) => Session) => {
   });
 };
 
-// 【核心】智慧路由：取得當前模式的資料
 const getActiveSeats = (): Seat[] => {
   const state = useProjectStore.getState();
   const session = state.sessions.find(s => s.id === state.activeSessionId);
@@ -34,7 +33,6 @@ const getActiveSeats = (): Seat[] => {
   return session.venue.seats;
 };
 
-// 【核心】智慧路由：將變更存入當前模式的陣列
 const updateActiveSeats = (updater: (seats: Seat[]) => Seat[]) => {
   const state = useProjectStore.getState();
   useProjectStore.setState({
@@ -56,12 +54,10 @@ const updateActiveSeats = (updater: (seats: Seat[]) => Seat[]) => {
 
 const deepClone = <T>(obj: T): T => JSON.parse(JSON.stringify(obj));
 
-// 【核心】Y 軸反轉演算法
 const sortSeatsByMode = (seatsToSort: Seat[], mode: SortMode, stageX: number, stageY: number, isPhoto: boolean) => {
   if (!seatsToSort || seatsToSort.length === 0) return [];
   const rows: Seat[][] = [];
   
-  // 拍照模式：Y 軸越大 (越靠近下方觀眾席) 越優先
   const sortedByY = [...seatsToSort].sort((a,b) => isPhoto ? b.y - a.y : a.y - b.y);
   
   let currentRow: Seat[] = [];
@@ -107,6 +103,10 @@ interface VenueUIState {
   isSequencing: boolean;
   numberSequenceCounter: number;
   isNumbering: boolean;
+
+  // 🟢 點擊抓取人員狀態
+  selectedPersonForAssign: string | null;
+  setSelectedPersonForAssign: (id: string | null) => void;
 
   setEditMode: (enabled: boolean) => void;
   setSelection: (ids: string[]) => void;
@@ -155,6 +155,10 @@ export const useVenueStore = create<VenueUIState>((set, get) => ({
   isSequencing: false,
   numberSequenceCounter: 1,
   isNumbering: false,
+
+  // 🟢 實作點擊抓取人員
+  selectedPersonForAssign: null,
+  setSelectedPersonForAssign: (id) => set({ selectedPersonForAssign: id }),
 
   setEditMode: (enabled) => set({ isEditMode: enabled, selectedSeatIds: [], isSequencing: false, isNumbering: false }),
   setSelection: (ids) => set({ selectedSeatIds: ids }),
@@ -284,7 +288,6 @@ export const useVenueStore = create<VenueUIState>((set, get) => ({
     seats.map(seat => seat.id === sid ? { ...seat, assignedPersonId: null } : seat)
   ),
 
-  // 【核心修改】拍照模式產生觀眾席，一般模式產生主舞台
   toggleMainStage: () => {
     get().saveHistory();
     const state = useProjectStore.getState();
@@ -296,7 +299,7 @@ export const useVenueStore = create<VenueUIState>((set, get) => ({
         if (hasStage) return seats.filter(seat => !(seat.type === 'shape' && seat.label === shapeLabel));
         return [...seats, {
             id: `stage-${Date.now()}`, x: VIRTUAL_WIDTH / 2 - 300, 
-            y: isPhoto ? 800 : 50, // 觀眾席預設放在畫面下方一點
+            y: isPhoto ? 800 : 50, 
             label: shapeLabel, rankWeight: 0, isPinned: false, assignedPersonId: null, 
             type: 'shape', width: 600, height: 150, shapeType: 'rect', isVisible: true
         }];

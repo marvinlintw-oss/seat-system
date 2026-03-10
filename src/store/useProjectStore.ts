@@ -34,8 +34,11 @@ interface ProjectState {
   
   activePhotoBatchId: string | null;
   setActivePhotoBatchId: (id: string | null) => void;
+
+  // 🟢 拍照模式上下分割排位開關
+  isSplitViewEnabled: boolean;
+  toggleSplitView: () => void;
   
-  // 【升級】支援傳入要複製的前一拍 ID
   addPhotoBatch: (name: string, copyFromId?: string) => void;
   removePhotoBatch: (id: string) => void;
   updatePhotoBatchName: (batchId: string, newName: string) => void;
@@ -85,7 +88,10 @@ export const useProjectStore = create<ProjectState>((set, _get) => ({
   activePhotoBatchId: null,
   setActivePhotoBatchId: (id) => set({ activePhotoBatchId: id }),
 
-  // 【核心升級】實作複製上一拍的站位與人員
+  // 🟢 實作分割模式狀態
+  isSplitViewEnabled: false,
+  toggleSplitView: () => set((state) => ({ isSplitViewEnabled: !state.isSplitViewEnabled })),
+
   addPhotoBatch: (name, copyFromId) => set((state) => {
     const sessionIndex = state.sessions.findIndex(s => s.id === state.activeSessionId);
     if (sessionIndex === -1) return state;
@@ -100,7 +106,6 @@ export const useProjectStore = create<ProjectState>((set, _get) => ({
     if (copyFromId) {
         const prevBatch = batches.find(b => b.id === copyFromId);
         if (prevBatch) {
-            // 重新產生 UUID 避免碰撞，但保留座標、站位編號與上面的人員！
             newSpots = prevBatch.spots.map(s => ({
                 ...s,
                 id: `seat-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`

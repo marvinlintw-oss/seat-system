@@ -9,6 +9,7 @@ import { ReportModal } from '../Modals/ReportModal';
 import { DataSyncModal } from '../Modals/DataSyncModal';
 import { StatsModal } from '../Modals/StatsModal';
 import { VersionDiffModal } from '../Modals/VersionDiffModal';
+import { useProjectStore } from '../../store/useProjectStore';
 
 export const PersonnelPanel: React.FC = () => {
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
@@ -16,7 +17,10 @@ export const PersonnelPanel: React.FC = () => {
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [isDataSyncOpen, setIsDataSyncOpen] = useState(false);
   const [isStatsOpen, setIsStatsOpen] = useState(false);
-  const [isDiffModalOpen, setIsDiffModalOpen] = useState(false); // 【新增】差異比對狀態
+  const [isDiffModalOpen, setIsDiffModalOpen] = useState(false); 
+
+  // 🟢 取得分割模式的狀態與切換函式
+  const { activeViewMode, isSplitViewEnabled, toggleSplitView } = useProjectStore();
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden animate-in slide-in-from-top-2 duration-300 bg-white relative">
@@ -32,7 +36,6 @@ export const PersonnelPanel: React.FC = () => {
             </button>
         </div>
         
-        {/* 【修改】改為 grid-cols-4 並加入異動按鈕 */}
         <div className="grid grid-cols-4 gap-1 px-1 mb-1.5">
           <button onClick={() => setIsSpreadsheetOpen(true)} className="bg-green-600 hover:bg-green-700 text-white py-1.5 rounded text-[12px] flex justify-center items-center gap-1 shadow-sm transition font-bold">
             <Table size={12}/> 編輯
@@ -40,7 +43,7 @@ export const PersonnelPanel: React.FC = () => {
           <button onClick={() => setIsReportOpen(true)} className="bg-amber-500 hover:bg-amber-600 text-white py-1.5 rounded text-[12px] flex justify-center items-center gap-1 shadow-sm transition font-bold">
             <Printer size={12}/> 報表
           </button>
-          <button onClick={() => setIsStatsOpen(true)} className="bg-slate-700 hover:bg-slate-800 text-white py-1.5 rounded text-[12x] flex justify-center items-center gap-1 shadow-sm transition font-bold">
+          <button onClick={() => setIsStatsOpen(true)} className="bg-slate-700 hover:bg-slate-800 text-white py-1.5 rounded text-[12px] flex justify-center items-center gap-1 shadow-sm transition font-bold">
             <BarChart3 size={12}/> 統計
           </button>
           <button onClick={() => setIsDiffModalOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white py-1.5 rounded text-[12px] flex justify-center items-center gap-1 shadow-sm transition font-bold">
@@ -50,6 +53,16 @@ export const PersonnelPanel: React.FC = () => {
         <button onClick={() => setIsDataSyncOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-[12px] flex justify-center items-center gap-1 shadow-sm transition font-bold w-full">
           <RefreshCw size={12}/> Google Sheet 雙向同步
         </button>
+
+        {/* 🟢 拍照模式專屬：上下分割排位按鈕 */}
+        {activeViewMode === 'photo' && (
+          <button 
+            onClick={toggleSplitView} 
+            className={`w-full mt-1.5 py-1.5 rounded text-[12px] flex justify-center items-center gap-1 shadow-sm transition font-bold ${isSplitViewEnabled ? 'bg-amber-500 hover:bg-amber-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'}`}
+          >
+            {isSplitViewEnabled ? '⬇️ 關閉上下分割排位' : '⬆️ 開啟上下聯動排位 (強烈推薦)'}
+          </button>
+        )}
       </div>
 
       <AutoArrange />
@@ -60,8 +73,6 @@ export const PersonnelPanel: React.FC = () => {
       <ReportModal isOpen={isReportOpen} onClose={() => setIsReportOpen(false)} />
       <DataSyncModal isOpen={isDataSyncOpen} onClose={() => setIsDataSyncOpen(false)} />
       <StatsModal isOpen={isStatsOpen} onClose={() => setIsStatsOpen(false)} />
-      
-      {/* 【修復】這裡補上剛才漏掉的 Component，紅黃字就會完全消失了！ */}
       <VersionDiffModal isOpen={isDiffModalOpen} onClose={() => setIsDiffModalOpen(false)} />
     </div>
   );

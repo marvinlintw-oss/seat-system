@@ -1,6 +1,7 @@
 // src/store/usePersonnelStore.ts
 import { create } from 'zustand';
 import { useProjectStore } from './useProjectStore';
+import { useVenueStore } from './useVenueStore'; 
 import type { Seat } from '../types';
 
 const getActiveSeats = (): Seat[] => {
@@ -50,7 +51,6 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
     const activeSession = state.sessions.find(s => s.id === state.activeSessionId);
     if (!activeSession) return;
     
-    // 只根據「主會場座位」來決定 isSeated (拍照不算入座)
     const seatedIds = new Set(activeSession.venue.seats.filter(s => s.assignedPersonId).map(s => s.assignedPersonId));
     useProjectStore.setState({
       personnel: state.personnel.map(p => ({ ...p, isSeated: seatedIds.has(p.id) }))
@@ -73,8 +73,6 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
       return isAttending && !assignedIds.has(p.id);
     }).sort((a, b) => b.rankScore - a.rankScore);
 
-    // 【殺手級功能：跨梯次錨定 (Cross-Batch Anchoring)】
-    // 如果是拍照模式，且不是第一拍，自動讓上一拍的長官留在原位
     if (isPhoto && activeSession.photoBatches) {
         const currentBatchIndex = activeSession.photoBatches.findIndex(b => b.id === state.activePhotoBatchId);
         if (currentBatchIndex > 0) {
@@ -83,14 +81,12 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
             activeSeats = activeSeats.map(seat => {
                 if (seat.assignedPersonId || seat.type === 'shape' || seat.isPinned) return seat;
                 
-                // 尋找上一拍「同一個編號/標籤」的位置
                 const prevSeat = prevBatch.spots.find(ps => ps.label === seat.label);
                 if (prevSeat && prevSeat.assignedPersonId) {
-                    // 如果這個人這梯次也要上台 (在 unassigned 名單內)
                     const personIdx = unassignedPeople.findIndex(p => p.id === prevSeat.assignedPersonId);
                     if (personIdx !== -1) {
                         const personToKeep = unassignedPeople[personIdx];
-                        unassignedPeople.splice(personIdx, 1); // 安排後移出待排區
+                        unassignedPeople.splice(personIdx, 1); 
                         return { ...seat, assignedPersonId: personToKeep.id };
                     }
                 }
@@ -99,7 +95,6 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
         }
     }
 
-    // 將剩下的空位依照 rankWeight 排序後填入剩下的人
     const emptySeats = activeSeats.filter(s => !s.assignedPersonId && s.type !== 'shape').sort((a, b) => a.rankWeight - b.rankWeight);
     
     emptySeats.forEach(seat => {
@@ -117,6 +112,9 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
       }
     });
 
+    // 【核心修復 3】執行大規模自動排位前，呼叫畫布大腦把當前狀態存進快照
+    useVenueStore.getState().saveHistory();
+    
     updateActiveSeats(() => activeSeats);
     if (!isPhoto) get().syncSeatingStatus();
   },
@@ -127,6 +125,10 @@ export const usePersonnelStore = create<PersonnelState>((_set, get) => ({
   resetSeating: () => {
     const activeSeats = getActiveSeats();
     const clearedSeats = activeSeats.map(s => s.isPinned ? s : { ...s, assignedPersonId: null });
+    
+    // 【核心修復 3】清空座位前，呼叫畫布大腦把當前狀態存進快照
+    useVenueStore.getState().saveHistory();
+    
     updateActiveSeats(() => clearedSeats);
     if (useProjectStore.getState().activeViewMode === 'seat') get().syncSeatingStatus();
   }
